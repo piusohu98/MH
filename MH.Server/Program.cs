@@ -225,7 +225,13 @@ app.MapGet("/api/v1/markets/{serverId}/{itemId}/indicators", async (
         indicators.SampleCount7Days,
         indicators.SampleCount30Days,
         indicators.InlierCount7Days,
-        indicators.InlierCount30Days));
+        indicators.InlierCount30Days,
+        indicators.Return7Days,
+        indicators.Return30Days,
+        indicators.Ewma7Days,
+        indicators.Ewma30Days,
+        indicators.Volatility7Days,
+        indicators.Volatility30Days));
 });
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });

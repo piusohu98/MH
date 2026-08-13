@@ -11,4 +11,10 @@ public sealed record MarketIndicatorsResponse(
     int SampleCount7Days,
     int SampleCount30Days,
     int InlierCount7Days,
-    int InlierCount30Days);
+    int InlierCount30Days,
+    decimal? Return7Days,
+    decimal? Return30Days,
+    decimal? Ewma7Days,
+    decimal? Ewma30Days,
+    decimal? Volatility7Days,
+    decimal? Volatility30Days);

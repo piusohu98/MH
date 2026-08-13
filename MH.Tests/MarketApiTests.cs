@@ -115,6 +115,12 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
         Assert.NotNull(indicators.RobustMedian30Days);
         Assert.NotNull(indicators.Mad7Days);
         Assert.NotNull(indicators.Mad30Days);
+        Assert.NotNull(indicators.Return7Days);
+        Assert.NotNull(indicators.Return30Days);
+        Assert.NotNull(indicators.Ewma7Days);
+        Assert.NotNull(indicators.Ewma30Days);
+        Assert.NotNull(indicators.Volatility7Days);
+        Assert.NotNull(indicators.Volatility30Days);
         Assert.True(indicators.InlierCount7Days <= indicators.SampleCount7Days);
         Assert.True(indicators.InlierCount30Days <= indicators.SampleCount30Days);
     }
@@ -235,6 +241,12 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
         Assert.Null(indicators.RobustMedian30Days);
         Assert.Null(indicators.Mad7Days);
         Assert.Null(indicators.Mad30Days);
+        Assert.Null(indicators.Return7Days);
+        Assert.Null(indicators.Return30Days);
+        Assert.Null(indicators.Ewma7Days);
+        Assert.Null(indicators.Ewma30Days);
+        Assert.Null(indicators.Volatility7Days);
+        Assert.Null(indicators.Volatility30Days);
     }
 
     [Fact]

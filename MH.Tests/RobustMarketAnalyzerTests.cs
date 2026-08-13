@@ -34,6 +34,70 @@ public sealed class RobustMarketAnalyzerTests
     }
 
     [Fact]
+    public void CalculatesSevenDayReturnEwmaAndVolatility()
+    {
+        var result = RobustMarketAnalyzer.Analyze(
+            new[]
+            {
+                Bar(Utc(2025, 1, 27), 100),
+                Bar(Utc(2025, 1, 28), 90),
+                Bar(Utc(2025, 1, 29), 90),
+                Bar(Utc(2025, 1, 30), 99)
+            },
+            Utc(2025, 2, 1));
+
+        Assert.Equal(-0.01m, result.Return7Days);
+        Assert.Equal(96.46875m, result.Ewma7Days);
+        Assert.Equal(0.1m, result.Volatility7Days);
+    }
+
+    [Fact]
+    public void CalculatesMetricsFromMadInliersInUtcOrder()
+    {
+        var result = RobustMarketAnalyzer.Analyze(
+            new[]
+            {
+                Bar(Utc(2025, 1, 31), 1000),
+                Bar(Utc(2025, 1, 30), 99),
+                Bar(Utc(2025, 1, 29), 90),
+                Bar(Utc(2025, 1, 28), 90),
+                Bar(Utc(2025, 1, 27), 100)
+            },
+            Utc(2025, 2, 1));
+
+        Assert.Equal(5, result.SampleCount7Days);
+        Assert.Equal(4, result.InlierCount7Days);
+        Assert.Equal(-0.01m, result.Return7Days);
+        Assert.Equal(96.46875m, result.Ewma7Days);
+        Assert.Equal(0.1m, result.Volatility7Days);
+    }
+
+    [Fact]
+    public void CalculatesDifferentThirtyDayMetricsFromOlderInliers()
+    {
+        var result = RobustMarketAnalyzer.Analyze(
+            new[]
+            {
+                Bar(Utc(2025, 1, 6), 600),
+                Bar(Utc(2025, 1, 27), 700),
+                Bar(Utc(2025, 1, 28), 630),
+                Bar(Utc(2025, 1, 29), 630),
+                Bar(Utc(2025, 1, 30), 693)
+            },
+            Utc(2025, 2, 1));
+
+        Assert.Equal(-0.01m, result.Return7Days);
+        Assert.Equal(0.155m, result.Return30Days);
+        Assert.Equal(675.28125m, result.Ewma7Days);
+        Assert.Equal(614.78615645989641816482787073m, result.Ewma30Days);
+        Assert.Equal(0.1m, result.Volatility7Days);
+        Assert.InRange(
+            result.Volatility30Days!.Value,
+            0.1166666666666666666666666665m,
+            0.1166666666666666666666666667m);
+    }
+
+    [Fact]
     public void MadZeroKeepsOnlyValuesEqualToTheMedian()
     {
         var result = RobustMarketAnalyzer.Analyze(
@@ -49,6 +113,9 @@ public sealed class RobustMarketAnalyzerTests
         Assert.Equal(0m, result.Mad7Days);
         Assert.Equal(3, result.InlierCount7Days);
         Assert.Equal(100m, result.RobustMedian7Days);
+        Assert.Equal(0m, result.Return7Days);
+        Assert.Equal(100m, result.Ewma7Days);
+        Assert.Equal(0m, result.Volatility7Days);
         Assert.Equal(0m, result.Mad30Days);
         Assert.Equal(3, result.InlierCount30Days);
         Assert.Equal(100m, result.RobustMedian30Days);
@@ -70,6 +137,9 @@ public sealed class RobustMarketAnalyzerTests
         Assert.Equal(0, result.InlierCount7Days);
         Assert.Null(result.Mad7Days);
         Assert.Null(result.RobustMedian7Days);
+        Assert.Null(result.Return7Days);
+        Assert.Null(result.Ewma7Days);
+        Assert.Null(result.Volatility7Days);
         Assert.Equal(3, result.SampleCount30Days);
         Assert.Equal(3, result.InlierCount30Days);
         Assert.Equal(1m, result.Mad30Days);
@@ -92,10 +162,16 @@ public sealed class RobustMarketAnalyzerTests
         Assert.Equal(1m, result.Mad7Days);
         Assert.Equal(2, result.InlierCount7Days);
         Assert.Null(result.RobustMedian7Days);
+        Assert.Null(result.Return7Days);
+        Assert.Null(result.Ewma7Days);
+        Assert.Null(result.Volatility7Days);
         Assert.Equal(3, result.SampleCount30Days);
         Assert.Equal(1m, result.Mad30Days);
         Assert.Equal(2, result.InlierCount30Days);
         Assert.Null(result.RobustMedian30Days);
+        Assert.Null(result.Return30Days);
+        Assert.Null(result.Ewma30Days);
+        Assert.Null(result.Volatility30Days);
     }
 
     [Fact]
