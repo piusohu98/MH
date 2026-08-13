@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="MH.Client/MH.Client.csproj" />
+  <Project Path="MH.Collector/MH.Collector.csproj" />
+  <Project Path="MH.Core/MH.Core.csproj" />
+  <Project Path="MH.Server/MH.Server.csproj" />
+  <Project Path="MH.Tests/MH.Tests.csproj" />
+</Solution>

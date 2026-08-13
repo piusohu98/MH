@@ -1,0 +1,30 @@
+# Build output
+**/bin/
+**/obj/
+artifacts/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# Local MH data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Test and coverage output
+TestResults/
+coverage/
+*.trx
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Local environment overrides
+appsettings.Local.json

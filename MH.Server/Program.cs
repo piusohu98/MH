@@ -1,0 +1,206 @@
+using System.Globalization;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.EntityFrameworkCore;
+using MH.Core;
+using MH.Core.Contracts;
+using MH.Core.Models;
+using MH.Server.Data;
+
+var builder = WebApplication.CreateBuilder(args);
+var databasePath = DatabaseOptions.ResolvePath(builder.Configuration);
+var databaseDirectory = System.IO.Path.GetDirectoryName(databasePath);
+if (!string.IsNullOrWhiteSpace(databaseDirectory))
+{
+    Directory.CreateDirectory(databaseDirectory);
+}
+
+builder.Services.AddProblemDetails();
+builder.Services.AddDbContext<MarketDbContext>(options => options.UseSqlite($"Data Source={databasePath};Cache=Shared;"));
+builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
+
+var app = builder.Build();
+app.UseExceptionHandler();
+
+await DatabaseInitializer.InitializeAsync(app.Services);
+
+app.MapPost("/api/v1/snapshots", async (SnapshotUploadRequest request, MarketDbContext db, CancellationToken cancellationToken) =>
+{
+    var serverId = request.ServerId?.Trim();
+    var source = request.Source?.Trim();
+    var observations = request.Observations;
+
+    if (string.IsNullOrWhiteSpace(serverId)
+        || string.IsNullOrWhiteSpace(source)
+        || source.Length > 40
+        || request.CapturedAtUtc == default
+        || observations is null
+        || observations.Count is < 1 or > 1000)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid snapshot request",
+            detail: "serverId, source, capturedAtUtc, and 1 to 1000 observations are required.");
+    }
+
+    var server = await db.Servers.AsNoTracking().SingleOrDefaultAsync(x => x.Id == serverId, cancellationToken);
+    if (server is null)
+    {
+        return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Server not found", detail: serverId);
+    }
+
+    var itemIds = observations.Select(x => x.ItemId?.Trim()).ToArray();
+    if (itemIds.Any(string.IsNullOrWhiteSpace)
+        || itemIds.Any(x => x is not null && x.Length > 80)
+        || itemIds.Distinct(StringComparer.Ordinal).Count() != itemIds.Length
+        || observations.Any(x => x.Price <= 0 || x.Quantity <= 0))
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid snapshot observations",
+            detail: "Each observation needs a unique itemId, positive integer price, and positive integer quantity.");
+    }
+
+    var existingItems = await db.Items.AsNoTracking()
+        .Where(x => itemIds.Contains(x.Id) && x.CatalogKind == server.CatalogKind)
+        .Select(x => x.Id)
+        .ToListAsync(cancellationToken);
+    if (existingItems.Count != itemIds.Length)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Unknown catalog item",
+            detail: "Every observation item must belong to the selected server catalog.");
+    }
+
+    var capturedAtUtc = request.CapturedAtUtc.ToUniversalTime();
+    var normalizedObservations = observations.Select(observation => new ListingObservation
+    {
+        SnapshotBatchId = string.Empty,
+        ServerId = serverId,
+        ItemId = observation.ItemId!.Trim(),
+        ObservedAtUtc = (observation.ObservedAtUtc ?? capturedAtUtc).ToUniversalTime(),
+        Price = observation.Price,
+        Quantity = observation.Quantity,
+        IsOcrAnomaly = observation.IsOcrAnomaly
+    }).ToList();
+
+    var payloadHash = SnapshotFingerprint.Compute(request);
+    var requestedBatchId = request.BatchId?.Trim();
+    if (requestedBatchId is { Length: > 120 } or { Length: 0 })
+    {
+        return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid batchId", detail: "batchId must contain 1 to 120 characters when supplied.");
+    }
+
+    var batchId = requestedBatchId ?? payloadHash;
+    var existing = await db.SnapshotBatches.AsNoTracking()
+        .SingleOrDefaultAsync(x => x.Id == batchId || x.PayloadHash == payloadHash, cancellationToken);
+    if (existing is not null)
+    {
+        if (!string.Equals(existing.PayloadHash, payloadHash, StringComparison.Ordinal))
+        {
+            return Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Batch id conflict", detail: "batchId already belongs to another payload.");
+        }
+
+        return Results.Ok(new SnapshotUploadResponse(existing.Id, true, await db.ListingObservations.CountAsync(x => x.SnapshotBatchId == existing.Id, cancellationToken)));
+    }
+
+    var batch = new SnapshotBatch
+    {
+        Id = batchId,
+        ServerId = serverId,
+        CapturedAtUtc = capturedAtUtc,
+        UploadedAtUtc = DateTimeOffset.UtcNow,
+        Source = source,
+        PayloadHash = payloadHash,
+        CatalogKind = server.CatalogKind
+    };
+    foreach (var observation in normalizedObservations)
+    {
+        observation.SnapshotBatchId = batchId;
+        batch.Observations.Add(observation);
+    }
+
+    db.SnapshotBatches.Add(batch);
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Created($"/api/v1/snapshots/{Uri.EscapeDataString(batchId)}", new SnapshotUploadResponse(batchId, false, normalizedObservations.Count));
+});
+
+app.MapGet("/api/v1/catalog", async (string? kind, MarketDbContext db, CancellationToken cancellationToken) =>
+{
+    if (!TryParseCatalogKind(kind, out var catalogKind))
+    {
+        return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid catalog kind", detail: "kind must be demo or official.");
+    }
+
+    var servers = await db.Servers.AsNoTracking().Where(x => x.CatalogKind == catalogKind).OrderBy(x => x.Id).Select(x => new ServerDto(x.Id, x.Name, x.Region, x.CatalogKind, x.CreatedAtUtc)).ToListAsync(cancellationToken);
+    var items = await db.Items.AsNoTracking().Where(x => x.CatalogKind == catalogKind).OrderBy(x => x.Id).Select(x => new ItemDto(x.Id, x.Name, x.Category, x.Unit, x.CatalogKind, x.CreatedAtUtc)).ToListAsync(cancellationToken);
+    return Results.Ok(new CatalogResponse(catalogKind, servers, items));
+});
+
+app.MapGet("/api/v1/markets/{serverId}/{itemId}/series", async (
+    string serverId,
+    string itemId,
+    string? fromUtc,
+    string? toUtc,
+    MarketDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(itemId)
+        || !TryParseOptionalUtc(fromUtc, out var from) || !TryParseOptionalUtc(toUtc, out var to)
+        || (from.HasValue && to.HasValue && from > to))
+    {
+        return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid series parameters", detail: "fromUtc and toUtc must be ISO-8601 UTC-compatible timestamps, with fromUtc no later than toUtc.");
+    }
+
+    var serverExists = await db.Servers.AsNoTracking().AnyAsync(x => x.Id == serverId, cancellationToken);
+    var itemExists = await db.Items.AsNoTracking().AnyAsync(x => x.Id == itemId, cancellationToken);
+    if (!serverExists || !itemExists)
+    {
+        return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Market entity not found", detail: "serverId or itemId does not exist.");
+    }
+
+    var observations = await db.ListingObservations.AsNoTracking()
+        .Where(x => x.ServerId == serverId && x.ItemId == itemId)
+        .OrderBy(x => x.ObservedAtUtc)
+        .ToListAsync(cancellationToken);
+    var bars = PriceBarAggregator.Aggregate(observations, from, to)
+        .Select(x => new PriceBarDto(x.StartUtc, x.EndUtc, x.Open, x.High, x.Low, x.Close, x.Volume, x.HasOcrAnomaly))
+        .ToArray();
+    return Results.Ok(new MarketSeriesResponse(serverId, itemId, from, to, bars));
+});
+
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
+
+app.Run();
+
+static bool TryParseCatalogKind(string? value, out CatalogKind kind)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        kind = CatalogKind.Demo;
+        return true;
+    }
+
+    return Enum.TryParse(value, ignoreCase: true, out kind) && kind is CatalogKind.Demo or CatalogKind.Official;
+}
+
+static bool TryParseOptionalUtc(string? value, out DateTimeOffset? parsed)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        parsed = null;
+        return true;
+    }
+
+    if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var timestamp))
+    {
+        parsed = timestamp.ToUniversalTime();
+        return true;
+    }
+
+    parsed = null;
+    return false;
+}
+
+public partial class Program { }
