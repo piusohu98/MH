@@ -1,12 +1,12 @@
 # 当前进度与续接说明
 
-快照时间：2026-08-13
+快照时间：2026-08-14
 
-远端仓库：`git@github.com:piusohu98/MH.git`
+远端仓库：`https://github.com/piusohu98/MH.git`
 
 ## 1. 已完成节点
 
-阶段 1 的可运行 MVP 已完成：
+阶段 1 的可运行 MVP，以及阶段 2 的分析指标闭环已完成：
 
 - `MH.slnx` 已包含 Core、Server、Client、Collector、Tests 五个项目。
 - SDK 锁定为 .NET 10.0.101，启用 nullable、确定性构建和警告即错误。
@@ -14,28 +14,54 @@
 - SQLite 建库时启用外键、WAL 和忙等待；日期按 UTC ISO-8601 字符串持久化。
 - 确定性 DEMO 数据包含 1 个区服、24 个商品、180 天、每日 4 次快照，并带节日、供给变化、昼夜和 OCR 异常标记。
 - API 已提供目录、日线、幂等快照上传、存活与就绪检查。
+- 指标 API 已提供 7/30 日稳健中位数、MAD、样本数、inlier 数、收益率、EWMA、样本波动率、可见供给变化和数据年龄。
+- 所有指标均以显式 `asOfUtc` 截断；未来快照和未完成日线不会进入历史结果，等价时区输入会归一化为相同 UTC 结果。
+- 价格趋势只使用 MAD inlier；可见供给变化独立使用完整日线 `Volume`，价格异常日仍参与供给序列。
+- 指标查询保留 30 天窗口；仅在窗口内没有完整日线时，以同市场窗口前最新一条历史观察作为数据年龄锚点，查询为倒序单行，不加载全部历史。
 - Client 与 Collector 当前是可编译的 WPF 空壳。
 
 ## 2. 已验证结果
 
-2026-08-13 本地验收：
+2026-08-14 `main@636d544` 本地验收：
 
 ```text
 dotnet build MH.slnx -c Release --no-restore
 结果：5/5 项目成功，0 warning，0 error
 
-dotnet test MH.Tests\MH.Tests.csproj -c Release
-结果：6 passed，0 failed，0 skipped
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-build
+结果：27 passed，0 failed，0 skipped
 ```
 
-6 项测试覆盖：模拟数据确定性、首次建库与种子目录、合法目录/走势参数、非法参数 Problem Details、快照幂等上传、非 UTC 输入归一化。
+27 项测试覆盖：模拟数据与建库、SQLite 连接 pragma、目录/走势/上传 API、UTC 归一化、MAD 与零离差、样本不足、异常值、7/30 日窗口、收益率、EWMA、样本波动率、可见供给变化、数据年龄、未来数据隔离和指标 API。
 
-节点 1 基线提交：`8baf88e feat: establish market data MVP`。
+独立真实 HTTP 复验已确认：
+
+- 固定数据返回 `visibleSupplyChange7Days=3`、`visibleSupplyChange30Days=7`、`dataAgeHours=12.5`，JSON 为 camelCase 数值字段。
+- 窗口外最近完整日线可返回精确 `dataAgeHours=1068.5`，且不会污染 7/30 日价格、样本或供给指标。
+- 当前日不完整数据、cutoff 之后的未来快照不会替代历史完整日线或改变历史响应。
+- 历史补查 SQL 使用同市场过滤、`ORDER BY ObservedAtUtc DESC LIMIT 1`。
+
+阶段 1 基线提交：`8baf88e feat: establish market data MVP`。
+
+阶段 2 分析指标提交链：
+
+```text
+2ef9669 feat(analytics): add robust market indicators
+e782880 fix(analytics): make robust median nullable
+bdcdd1c fix(server): restore data layer sources
+ddd2000 fix(server): configure SQLite connection pragmas
+d07e9e0 feat(server): expose robust market indicators
+1821ab6 fix(server): bound market indicators observation query
+7bd39f2 feat(analytics): add trend and volatility metrics
+fdf6d96 feat(analytics): add supply freshness indicators
+636d544 fix(api): anchor data age outside indicator window
+```
 
 ## 3. 尚未完成与已知欠账
 
 - 当前使用 `EnsureCreated` 首次建库，尚未生成正式 EF Core Migration；升级数据库前必须补上。
-- 日线聚合已存在，但 MAD、短中期指标、建议评分、回测和启用门槛尚未实现。
+- 可解释建议评分、置信度、规则版本、仓位上限、确定性滚动回测和启用门槛尚未实现。
+- 事件前/中/后比较与跨区标准化尚未实现。
 - WPF 两个程序只有工程壳，没有行情 UI、OCR、热键或采集状态机。
 - 尚无真实截图、OCR 模型、商品别名字典和标注集，不能评估真实识别率。
 - 尚未实现自包含 Windows 发布和 CI。
@@ -53,21 +79,31 @@ dotnet run --project MH.Server\MH.Server.csproj
 
 访问 API 前以服务启动日志显示的实际端口为准。
 
-推荐从阶段 2 的最小闭环继续：
+推荐从阶段 2 的下一个最小闭环继续：
 
-1. 为 MAD 和 7/30 日指标先写固定输入输出测试。
-2. 在 `MH.Core` 实现分析器，明确时间截断参数，保证不读取未来数据。
-3. 增加 SQLite 分析查询和 API；不先扩展 WPF。
-4. 用模拟数据完成确定性滚动回测及数据不足门槛。
-5. 分析 API 通过后再实现 WPF 总览和单商品走势图。
+1. 先定义纯 `MH.Core` 的建议输入、动作、分数、置信度、规则版本和理由合同，不接 WPF。
+2. 用固定指标输入编写“数据不足、趋势一致/冲突、高波动、陈旧数据、供给变化”测试，再实现最小可解释规则。
+3. 为规则增加时间滚动回测；特征只能读取决策时点以前的数据，并显式记录交易成本和流动性约束。
+4. 只有样本量、覆盖天数、异常率和回测稳定度达到门槛时才允许输出候选动作，否则输出“数据不足”或“观察”。
+5. 建议 API 与回测通过后，再实现 WPF 总览和单商品走势图。
+
+交接时应保留以下指标口径：
+
+- `Return7Days/30Days`：MAD inlier 按 `StartUtc` 排序后的末值/首值减一。
+- `Ewma7Days/30Days`：跨度分别为 7/30，`alpha = 2 / (span + 1)`，首个 inlier close 为初值。
+- `Volatility7Days/30Days`：相邻可用 inlier close 简单收益率的样本标准差，不年化、不填补缺失日期。
+- `VisibleSupplyChange7Days/30Days`：完整日线末 `Volume`/首 `Volume` 减一；至少 3 根且首量大于零。
+- `DataAgeHours`：cutoff 与最近完整日线结束点之间的 decimal 小时数；不得受 7/30 日窗口影响。
+- `Volume` 是按当前快照聚合得到的可见数量代理，受采集频率影响，不得描述成官方供给量或真实成交量。
 
 ## 5. 可直接交给后续 Codex 任务的提示词
 
 ```text
-继续 MH 项目阶段 2 的第一小节：只实现 MAD 异常过滤、7/30 日稳健指标和对应确定性测试。
+继续 MH 项目阶段 2 的下一小节：只实现纯 Core 的可解释建议规则合同与确定性测试。
 先阅读 docs/PROJECT_PLAN.md、docs/DEVELOPMENT_PLAN.md、docs/STATUS.md。
-不得修改 Collector/OCR/WPF，不得引入机器学习框架。
-成功标准：无未来数据读取；MAD=0、样本不足、异常值和 UTC 边界测试通过；Release 全解法 0 warning/0 error。
+复用现有 RobustMarketIndicators，不得修改 Collector/OCR/WPF，不得引入机器学习框架，不先增加数据库持久化或 API。
+先明确动作枚举、[-100,100] 方向分数、[0,1] 置信度、规则版本、理由和失效条件；数据门槛不足时只输出“数据不足”。
+成功标准：固定输入输出测试覆盖趋势一致/冲突、高波动、陈旧数据、供给变化和样本不足；无未来数据读取；Release 全解法 0 warning/0 error，全部测试通过。
 ```
 
 ## 6. 安全提醒
