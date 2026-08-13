@@ -231,7 +231,10 @@ app.MapGet("/api/v1/markets/{serverId}/{itemId}/indicators", async (
         indicators.Ewma7Days,
         indicators.Ewma30Days,
         indicators.Volatility7Days,
-        indicators.Volatility30Days));
+        indicators.Volatility30Days,
+        indicators.VisibleSupplyChange7Days,
+        indicators.VisibleSupplyChange30Days,
+        indicators.DataAgeHours));
 });
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });

@@ -17,4 +17,7 @@ public sealed record MarketIndicatorsResponse(
     decimal? Ewma7Days,
     decimal? Ewma30Days,
     decimal? Volatility7Days,
-    decimal? Volatility30Days);
+    decimal? Volatility30Days,
+    decimal? VisibleSupplyChange7Days,
+    decimal? VisibleSupplyChange30Days,
+    decimal? DataAgeHours);

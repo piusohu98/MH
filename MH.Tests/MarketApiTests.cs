@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
@@ -104,6 +105,7 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
         using var client = factory.CreateClient();
         var response = await client.GetAsync("/api/v1/markets/demo-server-01/demo-item-01/indicators?asOfUtc=2025-06-30T00:00:00Z");
         var indicators = await response.Content.ReadFromJsonAsync<MarketIndicatorsResponse>();
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(indicators);
@@ -121,6 +123,10 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
         Assert.NotNull(indicators.Ewma30Days);
         Assert.NotNull(indicators.Volatility7Days);
         Assert.NotNull(indicators.Volatility30Days);
+        AssertDecimalPropertyMatches(json.RootElement, "visibleSupplyChange7Days", indicators.VisibleSupplyChange7Days);
+        AssertDecimalPropertyMatches(json.RootElement, "visibleSupplyChange30Days", indicators.VisibleSupplyChange30Days);
+        AssertDecimalPropertyMatches(json.RootElement, "dataAgeHours", indicators.DataAgeHours);
+        Assert.False(json.RootElement.TryGetProperty("VisibleSupplyChange7Days", out _));
         Assert.True(indicators.InlierCount7Days <= indicators.SampleCount7Days);
         Assert.True(indicators.InlierCount30Days <= indicators.SampleCount30Days);
     }
@@ -247,6 +253,19 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
         Assert.Null(indicators.Ewma30Days);
         Assert.Null(indicators.Volatility7Days);
         Assert.Null(indicators.Volatility30Days);
+    }
+
+    private static void AssertDecimalPropertyMatches(JsonElement json, string propertyName, decimal? expected)
+    {
+        var property = json.GetProperty(propertyName);
+        if (expected.HasValue)
+        {
+            Assert.Equal(expected.Value, property.GetDecimal());
+        }
+        else
+        {
+            Assert.Equal(JsonValueKind.Null, property.ValueKind);
+        }
     }
 
     [Fact]

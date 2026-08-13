@@ -17,7 +17,10 @@ public sealed record RobustMarketIndicators(
     decimal? Ewma7Days,
     decimal? Ewma30Days,
     decimal? Volatility7Days,
-    decimal? Volatility30Days);
+    decimal? Volatility30Days,
+    decimal? VisibleSupplyChange7Days,
+    decimal? VisibleSupplyChange30Days,
+    decimal? DataAgeHours);
 
 public static class RobustMarketAnalyzer
 {
@@ -40,13 +43,17 @@ public static class RobustMarketAnalyzer
                     startUtc,
                     DateOnly.FromDateTime(startUtc.UtcDateTime),
                     bar.EndUtc.ToUniversalTime(),
-                    bar.Close);
+                    bar.Close,
+                    bar.Volume);
             })
             .Where(bar => bar.EndUtc <= cutoffUtc)
             .ToArray();
 
         var sevenDays = AnalyzeWindow(completedBars, cutoffDate, 7);
         var thirtyDays = AnalyzeWindow(completedBars, cutoffDate, 30);
+        decimal? dataAgeHours = completedBars.Length == 0
+            ? null
+            : (decimal)(cutoffUtc - completedBars.Max(bar => bar.EndUtc)).Ticks / TimeSpan.TicksPerHour;
 
         return new RobustMarketIndicators(
             cutoffUtc,
@@ -63,7 +70,10 @@ public static class RobustMarketAnalyzer
             sevenDays.Ewma,
             thirtyDays.Ewma,
             sevenDays.Volatility,
-            thirtyDays.Volatility);
+            thirtyDays.Volatility,
+            sevenDays.VisibleSupplyChange,
+            thirtyDays.VisibleSupplyChange,
+            dataAgeHours);
     }
 
     private static WindowResult AnalyzeWindow(
@@ -75,11 +85,12 @@ public static class RobustMarketAnalyzer
         var selectedBars = bars
             .Where(bar => bar.StartDate >= firstDate && bar.StartDate < cutoffDate)
             .ToArray();
+        var visibleSupplyChange = CalculateVisibleSupplyChange(selectedBars);
         var values = selectedBars.Select(bar => (decimal)bar.Close).ToArray();
 
         if (values.Length < MinimumSampleCount)
         {
-            return new WindowResult(null, null, values.Length, 0, null, null, null);
+            return new WindowResult(null, null, values.Length, 0, null, null, null, visibleSupplyChange);
         }
 
         var median = Median(values);
@@ -91,7 +102,7 @@ public static class RobustMarketAnalyzer
         decimal? robustMedian = inlierValues.Length >= MinimumSampleCount ? Median(inlierValues) : null;
         if (inliers.Length < MinimumSampleCount)
         {
-            return new WindowResult(robustMedian, mad, values.Length, inliers.Length, null, null, null);
+            return new WindowResult(robustMedian, mad, values.Length, inliers.Length, null, null, null, visibleSupplyChange);
         }
 
         var metrics = CalculateMetrics(inliers, windowDays);
@@ -102,7 +113,24 @@ public static class RobustMarketAnalyzer
             inliers.Length,
             metrics.Return,
             metrics.Ewma,
-            metrics.Volatility);
+            metrics.Volatility,
+            visibleSupplyChange);
+    }
+
+    private static decimal? CalculateVisibleSupplyChange(IReadOnlyList<CompletedBar> bars)
+    {
+        if (bars.Count < MinimumSampleCount)
+        {
+            return null;
+        }
+
+        var orderedBars = bars.OrderBy(bar => bar.StartUtc).ToArray();
+        if (orderedBars[0].Volume <= 0)
+        {
+            return null;
+        }
+
+        return (decimal)orderedBars[^1].Volume / orderedBars[0].Volume - 1m;
     }
 
     private static TrendMetrics CalculateMetrics(
@@ -177,7 +205,8 @@ public static class RobustMarketAnalyzer
         DateTimeOffset StartUtc,
         DateOnly StartDate,
         DateTimeOffset EndUtc,
-        int Close);
+        int Close,
+        int Volume);
 
     private sealed record WindowResult(
         decimal? Median,
@@ -186,7 +215,8 @@ public static class RobustMarketAnalyzer
         int InlierCount,
         decimal? Return,
         decimal? Ewma,
-        decimal? Volatility);
+        decimal? Volatility,
+        decimal? VisibleSupplyChange);
 
     private sealed record TrendMetrics(
         decimal Return,

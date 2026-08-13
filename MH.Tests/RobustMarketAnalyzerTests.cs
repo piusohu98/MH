@@ -199,8 +199,88 @@ public sealed class RobustMarketAnalyzerTests
         Assert.Equal(101.5m, result.RobustMedian30Days);
     }
 
-    private static PriceBar Bar(DateTimeOffset endUtc, int close)
-        => new(endUtc.AddDays(-1), endUtc, close, close, close, close, 1, false);
+    [Fact]
+    public void CalculatesDifferentVisibleSupplyChangesForSevenAndThirtyDayWindows()
+    {
+        var result = RobustMarketAnalyzer.Analyze(
+            new[]
+            {
+                Bar(Utc(2025, 1, 11), 100, 5),
+                Bar(Utc(2025, 1, 21), 101, 8),
+                Bar(Utc(2025, 1, 27), 102, 10),
+                Bar(Utc(2025, 1, 29), 103, 20),
+                Bar(Utc(2025, 1, 31), 104, 40)
+            },
+            Utc(2025, 2, 1));
+
+        Assert.Equal(3m, result.VisibleSupplyChange7Days);
+        Assert.Equal(7m, result.VisibleSupplyChange30Days);
+    }
+
+    [Fact]
+    public void VisibleSupplyChangeIncludesPriceMadOutliers()
+    {
+        var result = RobustMarketAnalyzer.Analyze(
+            new[]
+            {
+                Bar(Utc(2025, 1, 27), 100, 10),
+                Bar(Utc(2025, 1, 29), 10000, 20),
+                Bar(Utc(2025, 1, 31), 100, 40)
+            },
+            Utc(2025, 2, 1));
+
+        Assert.Equal(2, result.InlierCount7Days);
+        Assert.Equal(3m, result.VisibleSupplyChange7Days);
+        Assert.Equal(3m, result.VisibleSupplyChange30Days);
+    }
+
+    [Fact]
+    public void VisibleSupplyChangeRequiresThreeBarsAndPositiveFirstVolume()
+    {
+        var tooFew = RobustMarketAnalyzer.Analyze(
+            new[]
+            {
+                Bar(Utc(2025, 1, 27), 100, 10),
+                Bar(Utc(2025, 1, 29), 100, 20)
+            },
+            Utc(2025, 2, 1));
+        var zeroFirstVolume = RobustMarketAnalyzer.Analyze(
+            new[]
+            {
+                Bar(Utc(2025, 1, 27), 100, 0),
+                Bar(Utc(2025, 1, 29), 100, 20),
+                Bar(Utc(2025, 1, 31), 100, 40)
+            },
+            Utc(2025, 2, 1));
+
+        Assert.Null(tooFew.VisibleSupplyChange7Days);
+        Assert.Null(tooFew.VisibleSupplyChange30Days);
+        Assert.Null(zeroFirstVolume.VisibleSupplyChange7Days);
+        Assert.Null(zeroFirstVolume.VisibleSupplyChange30Days);
+    }
+
+    [Fact]
+    public void CalculatesDataAgeFromLatestCompletedBarUsingDecimalHours()
+    {
+        var cutoff = new DateTimeOffset(2025, 2, 1, 12, 0, 0, TimeSpan.Zero);
+        var latestEndUtc = new DateTimeOffset(2025, 1, 31, 9, 30, 0, TimeSpan.Zero);
+        var result = RobustMarketAnalyzer.Analyze(
+            new[]
+            {
+                Bar(new DateTimeOffset(2025, 1, 20, 9, 30, 0, TimeSpan.Zero), 100, 1),
+                Bar(latestEndUtc, 10000, 0)
+            },
+            cutoff);
+        var withoutCompletedBars = RobustMarketAnalyzer.Analyze(
+            new[] { Bar(cutoff.AddMinutes(1), 100, 1) },
+            cutoff);
+
+        Assert.Equal(26.5m, result.DataAgeHours);
+        Assert.Null(withoutCompletedBars.DataAgeHours);
+    }
+
+    private static PriceBar Bar(DateTimeOffset endUtc, int close, int volume = 1)
+        => new(endUtc.AddDays(-1), endUtc, close, close, close, close, volume, false);
 
     private static DateTimeOffset Utc(int year, int month, int day)
         => new(year, month, day, 0, 0, 0, TimeSpan.Zero);
