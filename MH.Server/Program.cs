@@ -200,9 +200,14 @@ app.MapGet("/api/v1/markets/{serverId}/{itemId}/indicators", async (
             detail: "serverId or itemId does not exist in a queryable catalog.");
     }
 
+    var cutoffDate = DateOnly.FromDateTime(cutoffUtc.UtcDateTime);
+    var observationStartUtc = new DateTimeOffset(
+        cutoffDate.AddDays(-30).ToDateTime(TimeOnly.MinValue),
+        TimeSpan.Zero);
     var observations = await db.ListingObservations.AsNoTracking()
         .Where(x => x.ServerId == serverId
             && x.ItemId == itemId
+            && x.ObservedAtUtc >= observationStartUtc
             && x.ObservedAtUtc <= cutoffUtc)
         .OrderBy(x => x.ObservedAtUtc)
         .ToListAsync(cancellationToken);

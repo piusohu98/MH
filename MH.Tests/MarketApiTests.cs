@@ -152,6 +152,38 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
     }
 
     [Fact]
+    public async Task IndicatorsIgnoreSnapshotsOlderThanThirtyDayWindow()
+    {
+        using var client = factory.CreateClient();
+        const string path = "/api/v1/markets/demo-server-01/demo-item-24/indicators?asOfUtc=2025-06-30T00:00:00Z";
+        var before = await client.GetFromJsonAsync<MarketIndicatorsResponse>(path);
+
+        var upload = await client.PostAsJsonAsync("/api/v1/snapshots", new SnapshotUploadRequest
+        {
+            BatchId = $"test-indicators-old-{Guid.NewGuid():N}",
+            ServerId = DemoGenerator.ServerId,
+            CapturedAtUtc = new DateTimeOffset(2024, 12, 1, 0, 0, 0, TimeSpan.Zero),
+            Source = "test",
+            Observations =
+            [
+                new ListingObservationDto
+                {
+                    ItemId = "demo-item-24",
+                    Price = 1,
+                    Quantity = 1,
+                    ObservedAtUtc = new DateTimeOffset(2024, 12, 1, 0, 1, 0, TimeSpan.Zero)
+                }
+            ]
+        });
+
+        var after = await client.GetFromJsonAsync<MarketIndicatorsResponse>(path);
+
+        Assert.Equal(HttpStatusCode.Created, upload.StatusCode);
+        Assert.NotNull(before);
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
     public async Task IndicatorsNormalizeEquivalentUtcOffsets()
     {
         using var client = factory.CreateClient();
