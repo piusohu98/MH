@@ -70,7 +70,7 @@ public static class RobustMarketAnalyzer
         var inliers = mad == 0m
             ? values.Where(value => value == median).ToArray()
             : values.Where(value => Math.Abs(value - median) <= MadMultiplier * mad).ToArray();
-        var robustMedian = inliers.Length >= MinimumSampleCount ? Median(inliers) : null;
+        decimal? robustMedian = inliers.Length >= MinimumSampleCount ? Median(inliers) : null;
 
         return new WindowResult(robustMedian, mad, values.Length, inliers.Length);
     }
