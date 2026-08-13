@@ -99,6 +99,113 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
     }
 
     [Fact]
+    public async Task IndicatorsReturnDemoMetricsThroughUtcCutoff()
+    {
+        using var client = factory.CreateClient();
+        var response = await client.GetAsync("/api/v1/markets/demo-server-01/demo-item-01/indicators?asOfUtc=2025-06-30T00:00:00Z");
+        var indicators = await response.Content.ReadFromJsonAsync<MarketIndicatorsResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(indicators);
+        Assert.Equal("demo-server-01", indicators!.ServerId);
+        Assert.Equal("demo-item-01", indicators.ItemId);
+        Assert.Equal(new DateTimeOffset(2025, 6, 30, 0, 0, 0, TimeSpan.Zero), indicators.CutoffUtc);
+        Assert.Equal(TimeSpan.Zero, indicators.CutoffUtc.Offset);
+        Assert.NotNull(indicators.RobustMedian7Days);
+        Assert.NotNull(indicators.RobustMedian30Days);
+        Assert.NotNull(indicators.Mad7Days);
+        Assert.NotNull(indicators.Mad30Days);
+        Assert.True(indicators.InlierCount7Days <= indicators.SampleCount7Days);
+        Assert.True(indicators.InlierCount30Days <= indicators.SampleCount30Days);
+    }
+
+    [Fact]
+    public async Task IndicatorsIgnoreSnapshotsAfterRequestedAsOf()
+    {
+        using var client = factory.CreateClient();
+        const string path = "/api/v1/markets/demo-server-01/demo-item-24/indicators?asOfUtc=2025-06-30T00:00:00Z";
+        var before = await client.GetFromJsonAsync<MarketIndicatorsResponse>(path);
+
+        var upload = await client.PostAsJsonAsync("/api/v1/snapshots", new SnapshotUploadRequest
+        {
+            BatchId = $"test-indicators-future-{Guid.NewGuid():N}",
+            ServerId = DemoGenerator.ServerId,
+            CapturedAtUtc = new DateTimeOffset(2025, 7, 1, 0, 0, 0, TimeSpan.Zero),
+            Source = "test",
+            Observations =
+            [
+                new ListingObservationDto
+                {
+                    ItemId = "demo-item-24",
+                    Price = 999999,
+                    Quantity = 1,
+                    ObservedAtUtc = new DateTimeOffset(2025, 7, 1, 0, 1, 0, TimeSpan.Zero)
+                }
+            ]
+        });
+
+        var after = await client.GetFromJsonAsync<MarketIndicatorsResponse>(path);
+
+        Assert.Equal(HttpStatusCode.Created, upload.StatusCode);
+        Assert.NotNull(before);
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task IndicatorsNormalizeEquivalentUtcOffsets()
+    {
+        using var client = factory.CreateClient();
+        var utc = await client.GetFromJsonAsync<MarketIndicatorsResponse>(
+            "/api/v1/markets/demo-server-01/demo-item-01/indicators?asOfUtc=2025-06-30T00:00:00Z");
+        var offset = await client.GetFromJsonAsync<MarketIndicatorsResponse>(
+            "/api/v1/markets/demo-server-01/demo-item-01/indicators?asOfUtc=2025-06-30T08%3A00%3A00%2B08%3A00");
+
+        Assert.NotNull(utc);
+        Assert.Equal(utc, offset);
+    }
+
+    [Fact]
+    public async Task IndicatorsRequireValidAsOfAndReturnProblemDetails()
+    {
+        using var client = factory.CreateClient();
+        var missing = await client.GetAsync("/api/v1/markets/demo-server-01/demo-item-01/indicators");
+        var invalid = await client.GetAsync("/api/v1/markets/demo-server-01/demo-item-01/indicators?asOfUtc=not-a-timestamp");
+
+        Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        Assert.Equal("application/problem+json", missing.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("application/problem+json", invalid.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task IndicatorsReturnNotFoundForUnknownMarketEntity()
+    {
+        using var client = factory.CreateClient();
+        var response = await client.GetAsync("/api/v1/markets/demo-server-01/not-in-demo-catalog/indicators?asOfUtc=2025-06-30T00:00:00Z");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task IndicatorsKeepAnalyzerNullAndCountSemanticsWhenEarlyDataIsInsufficient()
+    {
+        using var client = factory.CreateClient();
+        var indicators = await client.GetFromJsonAsync<MarketIndicatorsResponse>(
+            "/api/v1/markets/demo-server-01/demo-item-01/indicators?asOfUtc=2025-01-03T00:00:00Z");
+
+        Assert.NotNull(indicators);
+        Assert.Equal(2, indicators!.SampleCount7Days);
+        Assert.Equal(2, indicators.SampleCount30Days);
+        Assert.Equal(0, indicators.InlierCount7Days);
+        Assert.Equal(0, indicators.InlierCount30Days);
+        Assert.Null(indicators.RobustMedian7Days);
+        Assert.Null(indicators.RobustMedian30Days);
+        Assert.Null(indicators.Mad7Days);
+        Assert.Null(indicators.Mad30Days);
+    }
+
+    [Fact]
     public async Task InvalidParametersReturnProblemDetails()
     {
         using var client = factory.CreateClient();

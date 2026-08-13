@@ -169,6 +169,60 @@ app.MapGet("/api/v1/markets/{serverId}/{itemId}/series", async (
     return Results.Ok(new MarketSeriesResponse(serverId, itemId, from, to, bars));
 });
 
+app.MapGet("/api/v1/markets/{serverId}/{itemId}/indicators", async (
+    string serverId,
+    string itemId,
+    string? asOfUtc,
+    MarketDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    if (!TryParseRequiredUtc(asOfUtc, out var cutoffUtc))
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid indicators parameters",
+            detail: "asOfUtc is required and must be an ISO-8601 timestamp with an offset.");
+    }
+
+    var marketExists = await db.Servers.AsNoTracking()
+        .Where(x => x.Id == serverId)
+        .Join(
+            db.Items.AsNoTracking().Where(x => x.Id == itemId),
+            server => server.CatalogKind,
+            item => item.CatalogKind,
+            (_, _) => 1)
+        .AnyAsync(cancellationToken);
+    if (!marketExists)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Market entity not found",
+            detail: "serverId or itemId does not exist in a queryable catalog.");
+    }
+
+    var observations = await db.ListingObservations.AsNoTracking()
+        .Where(x => x.ServerId == serverId
+            && x.ItemId == itemId
+            && x.ObservedAtUtc <= cutoffUtc)
+        .OrderBy(x => x.ObservedAtUtc)
+        .ToListAsync(cancellationToken);
+    var dailyBars = PriceBarAggregator.Aggregate(observations);
+    var indicators = RobustMarketAnalyzer.Analyze(dailyBars, cutoffUtc);
+
+    return Results.Ok(new MarketIndicatorsResponse(
+        serverId,
+        itemId,
+        indicators.CutoffUtc,
+        indicators.RobustMedian7Days,
+        indicators.RobustMedian30Days,
+        indicators.Mad7Days,
+        indicators.Mad30Days,
+        indicators.SampleCount7Days,
+        indicators.SampleCount30Days,
+        indicators.InlierCount7Days,
+        indicators.InlierCount30Days));
+});
+
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
 
@@ -201,6 +255,36 @@ static bool TryParseOptionalUtc(string? value, out DateTimeOffset? parsed)
 
     parsed = null;
     return false;
+}
+
+static bool TryParseRequiredUtc(string? value, out DateTimeOffset parsed)
+{
+    parsed = default;
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return false;
+    }
+
+    var text = value.Trim();
+    var timeSeparatorIndex = text.IndexOfAny(['T', 't']);
+    if (timeSeparatorIndex < 0)
+    {
+        return false;
+    }
+
+    var timePart = text[(timeSeparatorIndex + 1)..];
+    var hasOffset = timePart.IndexOf('Z') >= 0
+        || timePart.IndexOf('z') >= 0
+        || timePart.IndexOf('+') >= 0
+        || timePart.LastIndexOf('-') >= 0;
+    if (!hasOffset
+        || !DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var timestamp))
+    {
+        return false;
+    }
+
+    parsed = timestamp.ToUniversalTime();
+    return true;
 }
 
 public partial class Program { }
