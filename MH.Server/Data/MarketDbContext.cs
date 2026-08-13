@@ -1,3 +1,5 @@
+using System.Data;
+using System.Data.Common;
 using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
@@ -6,8 +8,16 @@ using CoreServer = MH.Core.Models.Server;
 
 namespace MH.Server.Data;
 
-public sealed class MarketDbContext(DbContextOptions<MarketDbContext> options) : DbContext(options)
+public sealed class MarketDbContext : DbContext
 {
+    private const string ConnectionPragmaCommandText = "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;";
+
+    public MarketDbContext(DbContextOptions<MarketDbContext> options)
+        : base(options)
+    {
+        Database.GetDbConnection().StateChange += ConfigureSqliteConnection;
+    }
+
     public DbSet<CoreServer> Servers => Set<CoreServer>();
 
     public DbSet<Item> Items => Set<Item>();
@@ -23,6 +33,18 @@ public sealed class MarketDbContext(DbContextOptions<MarketDbContext> options) :
     public DbSet<TradeJournal> TradeJournals => Set<TradeJournal>();
 
     public DbSet<ServerIndex> ServerIndexes => Set<ServerIndex>();
+
+    private static void ConfigureSqliteConnection(object? sender, StateChangeEventArgs eventArgs)
+    {
+        if (eventArgs.CurrentState != ConnectionState.Open || sender is not DbConnection connection)
+        {
+            return;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = ConnectionPragmaCommandText;
+        command.ExecuteNonQuery();
+    }
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {

@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
@@ -57,6 +58,29 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
         var db = scope.ServiceProvider.GetRequiredService<MarketDbContext>();
         Assert.True(await db.Database.CanConnectAsync());
         Assert.NotEmpty(await db.SnapshotBatches.ToListAsync());
+    }
+
+    [Fact]
+    public async Task NewDatabaseConnectionsKeepSqlitePragmas()
+    {
+        using var client = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/health/ready")).StatusCode);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MarketDbContext>();
+        await db.Database.OpenConnectionAsync();
+        var connection = db.Database.GetDbConnection();
+
+        static async Task<object?> ScalarAsync(DbConnection connection, string sql)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            return await command.ExecuteScalarAsync();
+        }
+
+        Assert.Equal(1L, Convert.ToInt64(await ScalarAsync(connection, "PRAGMA foreign_keys;")));
+        Assert.Equal("wal", Convert.ToString(await ScalarAsync(connection, "PRAGMA journal_mode;"))?.ToLowerInvariant());
+        Assert.Equal(5000L, Convert.ToInt64(await ScalarAsync(connection, "PRAGMA busy_timeout;")));
     }
 
     [Fact]
