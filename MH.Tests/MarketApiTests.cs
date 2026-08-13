@@ -196,6 +196,40 @@ public sealed class MarketApiTests(MarketApiFactory factory) : IClassFixture<Mar
     }
 
     [Fact]
+    public async Task IndicatorsUseLatestOutsideWindowHistoryOnlyForDataAge()
+    {
+        using var client = factory.CreateClient();
+        var historicalObservationUtc = new DateTimeOffset(2024, 11, 17, 12, 0, 0, TimeSpan.Zero);
+        var upload = await client.PostAsJsonAsync("/api/v1/snapshots", new SnapshotUploadRequest
+        {
+            BatchId = $"test-indicators-age-anchor-{Guid.NewGuid():N}",
+            ServerId = DemoGenerator.ServerId,
+            CapturedAtUtc = historicalObservationUtc,
+            Source = "test",
+            Observations =
+            [
+                new ListingObservationDto
+                {
+                    ItemId = "demo-item-23",
+                    Price = 1234,
+                    Quantity = 7,
+                    ObservedAtUtc = historicalObservationUtc
+                }
+            ]
+        });
+        var indicators = await client.GetFromJsonAsync<MarketIndicatorsResponse>(
+            "/api/v1/markets/demo-server-01/demo-item-23/indicators?asOfUtc=2025-01-01T12:30:00Z");
+
+        Assert.Equal(HttpStatusCode.Created, upload.StatusCode);
+        Assert.NotNull(indicators);
+        Assert.Equal(0, indicators!.SampleCount7Days);
+        Assert.Equal(0, indicators.SampleCount30Days);
+        Assert.Null(indicators.VisibleSupplyChange7Days);
+        Assert.Null(indicators.VisibleSupplyChange30Days);
+        Assert.Equal(1068.5m, indicators.DataAgeHours);
+    }
+
+    [Fact]
     public async Task IndicatorsNormalizeEquivalentUtcOffsets()
     {
         using var client = factory.CreateClient();

@@ -212,6 +212,21 @@ app.MapGet("/api/v1/markets/{serverId}/{itemId}/indicators", async (
         .OrderBy(x => x.ObservedAtUtc)
         .ToListAsync(cancellationToken);
     var dailyBars = PriceBarAggregator.Aggregate(observations);
+    if (!dailyBars.Any(bar => bar.EndUtc <= cutoffUtc))
+    {
+        var latestHistoricalObservation = await db.ListingObservations.AsNoTracking()
+            .Where(x => x.ServerId == serverId
+                && x.ItemId == itemId
+                && x.ObservedAtUtc < observationStartUtc)
+            .OrderByDescending(x => x.ObservedAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (latestHistoricalObservation is not null)
+        {
+            dailyBars = dailyBars
+                .Concat(PriceBarAggregator.Aggregate([latestHistoricalObservation]))
+                .ToArray();
+        }
+    }
     var indicators = RobustMarketAnalyzer.Analyze(dailyBars, cutoffUtc);
 
     return Results.Ok(new MarketIndicatorsResponse(
