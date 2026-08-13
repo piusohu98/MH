@@ -11,7 +11,7 @@ artifacts/
 *.suo
 
 # Local MH data
-data/
+/data/
 *.db
 *.db-shm
 *.db-wal
