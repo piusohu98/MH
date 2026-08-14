@@ -139,6 +139,147 @@ app.MapGet("/api/v1/catalog", async (string? kind, MarketDbContext db, Cancellat
     return Results.Ok(new CatalogResponse(catalogKind, servers, items));
 });
 
+app.MapGet("/api/v1/markets/{serverId}/{itemId}/events", async (
+    string serverId,
+    string itemId,
+    string? fromUtc,
+    string? toUtc,
+    string? type,
+    MarketDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    if (!TryParseRequiredUtc(fromUtc, out var from)
+        || !TryParseRequiredUtc(toUtc, out var to)
+        || from >= to
+        || to - from > TimeSpan.FromDays(366)
+        || !TryParseMarketEventType(type, out var eventType))
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid event parameters",
+            detail: "fromUtc and toUtc are required UTC-compatible timestamps no more than 366 days apart; type must be a known market event type when supplied.");
+    }
+
+    var market = await db.Servers.AsNoTracking()
+        .Where(x => x.Id == serverId)
+        .Join(
+            db.Items.AsNoTracking().Where(x => x.Id == itemId),
+            server => server.CatalogKind,
+            item => item.CatalogKind,
+            (server, _) => new { server.CatalogKind })
+        .SingleOrDefaultAsync(cancellationToken);
+    if (market is null)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Market entity not found",
+            detail: "serverId or itemId does not exist in a queryable catalog.");
+    }
+
+    var eventsQuery = db.Events.AsNoTracking()
+        .Where(x => x.ServerId == serverId
+            && x.CatalogKind == market.CatalogKind
+            && x.EndsAtUtc > x.StartsAtUtc
+            && (x.ItemId == null || x.ItemId == itemId)
+            && x.StartsAtUtc < to
+            && x.EndsAtUtc > from);
+    if (eventType.HasValue)
+    {
+        eventsQuery = eventsQuery.Where(x => x.Type == eventType.Value);
+    }
+
+    var events = await eventsQuery
+        .OrderBy(x => x.StartsAtUtc)
+        .ThenBy(x => x.Id)
+        .Select(x => new MarketEventDto(
+            x.Id,
+            x.ServerId,
+            x.ItemId,
+            x.Type,
+            x.Label,
+            x.StartsAtUtc,
+            x.EndsAtUtc,
+            x.CatalogKind))
+        .ToListAsync(cancellationToken);
+    return Results.Ok(events);
+});
+
+app.MapGet("/api/v1/markets/{serverId}/{itemId}/events/{eventId}/impact", async (
+    string serverId,
+    string itemId,
+    string eventId,
+    string? asOfUtc,
+    string? windowDays,
+    MarketDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var requestedWindowDays = EventImpactAnalyzer.DefaultWindowDays;
+    if (!TryParseRequiredUtc(asOfUtc, out var cutoffUtc)
+        || (!string.IsNullOrWhiteSpace(windowDays)
+            && (!int.TryParse(windowDays, NumberStyles.Integer, CultureInfo.InvariantCulture, out requestedWindowDays)
+                || requestedWindowDays is < EventImpactAnalyzer.MinimumWindowDays or > EventImpactAnalyzer.MaximumWindowDays)))
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid event impact parameters",
+            detail: $"asOfUtc is required with an offset; optional windowDays must be an integer between {EventImpactAnalyzer.MinimumWindowDays} and {EventImpactAnalyzer.MaximumWindowDays}.");
+    }
+
+    var market = await db.Servers.AsNoTracking()
+        .Where(x => x.Id == serverId)
+        .Join(
+            db.Items.AsNoTracking().Where(x => x.Id == itemId),
+            server => server.CatalogKind,
+            item => item.CatalogKind,
+            (server, _) => new { server.CatalogKind })
+        .SingleOrDefaultAsync(cancellationToken);
+    if (market is null)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Market entity not found",
+            detail: "serverId or itemId does not exist in a queryable catalog.");
+    }
+
+    var marketEvent = await db.Events.AsNoTracking()
+        .Where(x => x.Id == eventId
+            && x.ServerId == serverId
+            && x.CatalogKind == market.CatalogKind
+            && x.EndsAtUtc > x.StartsAtUtc
+            && (x.ItemId == null || x.ItemId == itemId))
+        .SingleOrDefaultAsync(cancellationToken);
+    if (marketEvent is null)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Event not found",
+            detail: "The event does not belong to the requested server and item.");
+    }
+
+    var eventStartUtc = marketEvent.StartsAtUtc.ToUniversalTime();
+    var eventEndUtc = marketEvent.EndsAtUtc.ToUniversalTime();
+    var observationStartUtc = eventStartUtc.AddDays(-requestedWindowDays);
+    var observationEndUtc = eventEndUtc.AddDays(requestedWindowDays);
+    var observations = await db.ListingObservations.AsNoTracking()
+        .Where(x => x.ServerId == serverId
+            && x.ItemId == itemId
+            && x.ObservedAtUtc >= observationStartUtc
+            && x.ObservedAtUtc < observationEndUtc
+            && x.ObservedAtUtc <= cutoffUtc)
+        .OrderBy(x => x.ObservedAtUtc)
+        .ToListAsync(cancellationToken);
+    var dailyBars = PriceBarAggregator.Aggregate(observations);
+    var analysis = EventImpactAnalyzer.Analyze(marketEvent, dailyBars, cutoffUtc, requestedWindowDays);
+
+    return Results.Ok(new EventImpactResponse(
+        ToMarketEventDto(analysis.Event),
+        analysis.AsOfUtc,
+        analysis.WindowDays,
+        analysis.Before,
+        analysis.During,
+        analysis.After));
+});
+
 app.MapGet("/api/v1/markets/{serverId}/{itemId}/series", async (
     string serverId,
     string itemId,
@@ -293,6 +434,36 @@ static bool TryParseCatalogKind(string? value, out CatalogKind kind)
 
     return Enum.TryParse(value, ignoreCase: true, out kind) && kind is CatalogKind.Demo or CatalogKind.Official;
 }
+
+static bool TryParseMarketEventType(string? value, out MarketEventType? eventType)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        eventType = null;
+        return true;
+    }
+
+    if (Enum.TryParse<MarketEventType>(value, ignoreCase: true, out var parsed)
+        && Enum.IsDefined(parsed))
+    {
+        eventType = parsed;
+        return true;
+    }
+
+    eventType = null;
+    return false;
+}
+
+static MarketEventDto ToMarketEventDto(Event marketEvent)
+    => new(
+        marketEvent.Id,
+        marketEvent.ServerId,
+        marketEvent.ItemId,
+        marketEvent.Type,
+        marketEvent.Label,
+        marketEvent.StartsAtUtc.ToUniversalTime(),
+        marketEvent.EndsAtUtc.ToUniversalTime(),
+        marketEvent.CatalogKind);
 
 static bool TryParseOptionalUtc(string? value, out DateTimeOffset? parsed)
 {

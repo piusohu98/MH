@@ -22,8 +22,9 @@
 - 纯 Core 确定性滚动回测：历史截断、下一日开盘执行、成本/滑点、收益、回撤、换手和逐次记录。
 - 多窗口回测质量门禁：区分仅研究、禁用和小额人工监督试用，单个赚钱窗口不能直接启用规则。
 - 只读建议预览 API：按显式历史时点返回建议、可执行标记、三窗口回测门禁和固定研究假设。
+- 活动事件研究后端：查询区服级/商品级活动，并按显式历史时点比较活动前、中、后的常见价格和采集到的在售数量；未发生时段和样本不足会明确返回不可用原因。
 - WPF 客户端第一屏已按游戏玩家重排：突出最近采集价、当日高低、相对近期常见价、价格方向、稳定性、在售数量变化和囤货参考；技术指标收进进阶折叠区。采集器仍是可编译空壳。
-- 122 项自动化测试，覆盖数据闭环、稳健指标、定向虚拟场景、滚动回测、质量门禁、建议预览 API，以及客户端初始化、安全降级、当前价格、玩家文案和所有展示阈值。
+- 153 项自动化测试，覆盖数据闭环、稳健指标、定向虚拟场景、滚动回测、质量门禁、建议预览 API、活动影响研究，以及客户端初始化、安全降级、当前价格、玩家文案和所有展示阈值。
 
 ## 运行与验证
 
@@ -43,6 +44,8 @@ dotnet run --project MH.Client\MH.Client.csproj
 - `GET /api/v1/markets/demo-server-01/demo-item-01/series`
 - `GET /api/v1/markets/demo-server-01/demo-item-01/indicators`
 - `GET /api/v1/markets/demo-server-01/demo-item-01/recommendation?asOfUtc=2025-06-30T00:00:00Z`
+- `GET /api/v1/markets/demo-server-01/demo-item-01/events?fromUtc=2025-01-01T00:00:00Z&toUtc=2025-06-30T00:00:00Z&type=Holiday`
+- `GET /api/v1/markets/demo-server-01/demo-item-01/events/demo-supply-007/impact?asOfUtc=2025-06-30T00:00:00Z&windowDays=7`
 - `POST /api/v1/snapshots`
 - `GET /health/live`
 - `GET /health/ready`
@@ -50,7 +53,7 @@ dotnet run --project MH.Client\MH.Client.csproj
 ## 后续计划
 
 1. 分析层：可见供给成交容量约束、完整平仓周期和命中率口径。
-2. WPF 行情面板：完成人工视觉验收后，扩展活动日历、事件影响研究、区服指标和个人仓位。
+2. WPF 行情面板：完成人工视觉验收后，把已完成的活动研究后端接入活动日历和走势图，再扩展区服指标与个人仓位。
 3. OCR 与悬浮查价：本地 RapidOcrNet、低置信度显式提示、`Ctrl+Alt+M`、多显示器/DPI。
 4. 采集器离线闭环：截图目录/录制帧回放、状态机、断点恢复和人工处理通知。
 5. 真实适配预留：截图规范、标注格式、观察模式和窗口捕获说明；没有真实截图前不编造坐标。

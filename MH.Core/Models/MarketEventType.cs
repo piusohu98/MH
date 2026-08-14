@@ -1,5 +1,8 @@
+using System.Text.Json.Serialization;
+
 namespace MH.Core.Models;
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum MarketEventType
 {
     DayNight = 0,

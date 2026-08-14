@@ -18,7 +18,7 @@
 | 项目 | 当前职责 | 后续职责 |
 | --- | --- | --- |
 | `MH.Core` | 领域模型、DTO、确定性模拟器、日线聚合、上传指纹 | 指标、异常过滤、建议、回测 |
-| `MH.Server` | SQLite、种子数据、目录/走势/上传/健康 API | 分析查询、事件学习、仓位数据 |
+| `MH.Server` | SQLite、种子数据、目录/走势/上传/健康 API、事件查询与单商品事件影响研究 | 事件日历、跨区事件标准化、仓位数据 |
 | `MH.Client` | 只读 API 客户端、WPF 单商品走势/指标/建议第一屏 | 日历、建议榜、区服指标和仓位 |
 | `MH.Collector` | 可编译 WPF 壳 | 截图/OCR、状态机、回放和通知 |
 | `MH.Tests` | Core 与 API 集成测试 | 分析、OCR、状态机和端到端测试 |
@@ -63,6 +63,10 @@ flowchart LR
 `backtest-quality-gate-v1` 至少需要 3 个互不重叠窗口，每窗覆盖 30 天、20 次决策和 3 次交易；盈利窗口比例至少 2/3，收益中位数至少 2%，平均换手不超过 1.0。最坏回撤不超过 20% 才可小额试用，20%–35% 仅研究，超过 35% 禁用；任一窗口收益低于 -10% 仅研究，达到 -25% 禁用；整体平均收益非正或规则版本不一致也禁用。`TrialEligible` 仅代表可进行小额人工监督试用，不构成真实获利保证。
 
 只读建议预览端点要求显式 `asOfUtc`，数据库查询限制在 `[asOfUtc-151天, asOfUtc]`，用于 3 个相接但不重叠的 40 天窗口、30 天预热和 1 天边界补偿。固定研究假设为初始资金 100000、交易成本率 1%、滑点率 0.5%。响应同时返回原始建议、门禁状态/理由/摘要和假设；仅当门禁为 `TrialEligible` 且动作是候选买入/卖出时 `isActionable=true`，其它状态一律不可执行。结果不写入数据库。
+
+当前活动事件影响研究节点固定口径：`EventImpactAnalyzer` 只接受 `EndsAtUtc > StartsAtUtc`、不重复且为完整一日的 `PriceBar`；分析时统一转换为 UTC，只纳入 `EndUtc <= asOfUtc` 的日线。`windowDays` 缺失或空白时默认为 7，显式值允许 3–30，阶段使用半开区间 `Before=[StartsAtUtc-windowDays, StartsAtUtc)`、`During=[StartsAtUtc, EndsAtUtc)`、`After=[EndsAtUtc, EndsAtUtc+windowDays)`。价格先排除 `HasOcrAnomaly`，再用中位数/MAD 三倍过滤，MAD 为零时只保留等于中位数的样本，至少 3 个内点才给稳健中位价；在售数量继续使用完整日线 `Volume`，阶段至少 3 根才给中位数，OCR 异常日仍计入数量。每阶段返回请求/有效观察窗口、完整性、可用性、原因、原始根数、OCR 排除数、价格内点数/稳健中位价、数量样本数/中位数；活动中和活动后的价格变化、在售数量变化分别与各自活动前基线独立比较，并分别返回价格或在售数量比较不可用原因。
+
+事件 API 为 `GET /api/v1/markets/{serverId}/{itemId}/events?fromUtc=...&toUtc=...&type=...` 和 `GET /api/v1/markets/{serverId}/{itemId}/events/{eventId}/impact?asOfUtc=...&windowDays=...`。事件列表要求带 offset 的 UTC 时间、范围不超过 366 天，按半开区间重叠过滤并按开始时间/事件 ID 排序；影响查询只读取三阶段所需的有界观察区间，并在数据库条件中截断 `ObservedAtUtc <= asOfUtc`。这些接口只输出研究事实，不输出盈利或买卖结论。
 
 客户端通过接口化 `HttpClient` 消费目录、走势、指标和建议端点；区服/商品路径段必须编码，所有历史时点在请求边界统一为 UTC。第一屏 ViewModel 使用 `Idle/Loading/Ready/Offline/Error` 状态和请求代次，后发请求会取消旧请求，即使旧请求忽略取消也不能覆盖新结果。联网失败时保留最后成功快照并标记陈旧；在线数据年龄超过 `recommendation-rules-v1` 的 48 小时上限也视为陈旧。只有 `Ready`、非陈旧且服务端 `isActionable=true` 时客户端才显示为可执行，否则候选买卖降为观察。
 
