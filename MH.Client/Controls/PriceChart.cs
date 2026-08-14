@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Media;
 using MH.Core.Contracts;
+using MH.Core.Models;
 
 namespace MH.Client.Controls;
 
@@ -29,6 +30,84 @@ public sealed class PriceChart : FrameworkElement
     {
         get => (decimal?)GetValue(CommonPrice7DaysProperty);
         set => SetValue(CommonPrice7DaysProperty, value);
+    }
+
+    public static readonly DependencyProperty EventsProperty = DependencyProperty.Register(
+        nameof(Events),
+        typeof(IReadOnlyList<MarketEventDto>),
+        typeof(PriceChart),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public IReadOnlyList<MarketEventDto>? Events
+    {
+        get => (IReadOnlyList<MarketEventDto>?)GetValue(EventsProperty);
+        set => SetValue(EventsProperty, value);
+    }
+
+    public sealed record EventBand(
+        string Id,
+        MarketEventType Type,
+        DateTimeOffset StartUtc,
+        DateTimeOffset EndUtc,
+        string Label);
+
+    public static IReadOnlyList<EventBand> GetVisibleEventBands(
+        IReadOnlyList<MarketEventDto>? events,
+        DateTimeOffset rangeStartUtc,
+        DateTimeOffset rangeEndUtc)
+    {
+        var startUtc = rangeStartUtc.ToUniversalTime();
+        var endUtc = rangeEndUtc.ToUniversalTime();
+        if (startUtc >= endUtc || events is null || events.Count == 0)
+        {
+            return [];
+        }
+
+        return events
+            .Where(eventItem => eventItem.Type is MarketEventType.Holiday or MarketEventType.SupplyChange)
+            .Select(eventItem =>
+            {
+                var eventStartUtc = eventItem.StartsAtUtc.ToUniversalTime();
+                var eventEndUtc = eventItem.EndsAtUtc.ToUniversalTime();
+                return new
+                {
+                    Event = eventItem,
+                    StartUtc = eventStartUtc < startUtc ? startUtc : eventStartUtc,
+                    EndUtc = eventEndUtc > endUtc ? endUtc : eventEndUtc
+                };
+            })
+            .Where(item => item.StartUtc < item.EndUtc)
+            .OrderBy(item => item.StartUtc)
+            .ThenBy(item => item.EndUtc)
+            .ThenBy(item => item.Event.Id, StringComparer.Ordinal)
+            .Select(item => new EventBand(
+                item.Event.Id,
+                item.Event.Type,
+                item.StartUtc,
+                item.EndUtc,
+                item.Event.Label))
+            .ToArray();
+    }
+
+    public static double MapUtcToX(
+        DateTimeOffset valueUtc,
+        DateTimeOffset chartStartUtc,
+        DateTimeOffset chartEndUtc,
+        double left,
+        double right)
+    {
+        var startUtc = chartStartUtc.ToUniversalTime();
+        var endUtc = chartEndUtc.ToUniversalTime();
+        if (startUtc >= endUtc)
+        {
+            return (left + right) / 2d;
+        }
+
+        var fraction = Math.Clamp(
+            (valueUtc.ToUniversalTime() - startUtc).TotalSeconds / (endUtc - startUtc).TotalSeconds,
+            0d,
+            1d);
+        return left + (right - left) * fraction;
     }
 
     protected override void OnRender(DrawingContext drawingContext)
@@ -59,12 +138,40 @@ public sealed class PriceChart : FrameworkElement
         }
 
         var range = Math.Max(1d, maximum - minimum);
+        var chartStartUtc = bars[0].StartUtc.ToUniversalTime();
+        var chartEndUtc = bars[^1].EndUtc.ToUniversalTime();
+        var eventBands = GetVisibleEventBands(Events, chartStartUtc, chartEndUtc);
+        var xForUtc = (DateTimeOffset value) => MapUtcToX(value, chartStartUtc, chartEndUtc, left, right);
+        foreach (var eventBand in eventBands)
+        {
+            var eventBrush = new SolidColorBrush(eventBand.Type == MarketEventType.Holiday
+                ? Color.FromArgb(54, 245, 158, 11)
+                : Color.FromArgb(54, 129, 140, 248));
+            eventBrush.Freeze();
+            var eventLeft = xForUtc(eventBand.StartUtc);
+            var eventRight = xForUtc(eventBand.EndUtc);
+            drawingContext.DrawRectangle(
+                eventBrush,
+                null,
+                new Rect(eventLeft, top, Math.Max(1d, eventRight - eventLeft), bottom - top));
+        }
+
+        if (eventBands.Count > 0)
+        {
+            DrawText(
+                drawingContext,
+                "淡金：节日 · 淡紫：供给变化",
+                new Point(left, 8),
+                Brushes.LightSlateGray,
+                10);
+        }
+
         var points = new Point[bars.Length];
         for (var index = 0; index < bars.Length; index++)
         {
             var x = bars.Length == 1
                 ? (left + right) / 2d
-                : left + (right - left) * index / (bars.Length - 1d);
+                : MapUtcToX(bars[index].EndUtc, chartStartUtc, chartEndUtc, left, right);
             var y = bottom - (bars[index].Close - minimum) / range * (bottom - top);
             points[index] = new Point(x, y);
         }

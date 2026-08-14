@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | `MH.Core` | 领域模型、DTO、确定性模拟器、日线聚合、上传指纹 | 指标、异常过滤、建议、回测 |
 | `MH.Server` | SQLite、种子数据、目录/走势/上传/健康 API、事件查询与单商品事件影响研究 | 事件日历、跨区事件标准化、仓位数据 |
-| `MH.Client` | 只读 API 客户端、WPF 单商品走势/指标/建议第一屏 | 日历、建议榜、区服指标和仓位 |
+| `MH.Client` | 只读 API 客户端、WPF 单商品走势/指标/建议第一屏、活动观察卡和走势图事件标记 | 跨事件归纳、建议榜、区服指标和仓位 |
 | `MH.Collector` | 可编译 WPF 壳 | 截图/OCR、状态机、回放和通知 |
 | `MH.Tests` | Core 与 API 集成测试 | 分析、OCR、状态机和端到端测试 |
 
@@ -66,9 +66,11 @@ flowchart LR
 
 当前活动事件影响研究节点固定口径：`EventImpactAnalyzer` 只接受 `EndsAtUtc > StartsAtUtc`、不重复且为完整一日的 `PriceBar`；分析时统一转换为 UTC，只纳入 `EndUtc <= asOfUtc` 的日线。`windowDays` 缺失或空白时默认为 7，显式值允许 3–30，阶段使用半开区间 `Before=[StartsAtUtc-windowDays, StartsAtUtc)`、`During=[StartsAtUtc, EndsAtUtc)`、`After=[EndsAtUtc, EndsAtUtc+windowDays)`。价格先排除 `HasOcrAnomaly`，再用中位数/MAD 三倍过滤，MAD 为零时只保留等于中位数的样本，至少 3 个内点才给稳健中位价；在售数量继续使用完整日线 `Volume`，阶段至少 3 根才给中位数，OCR 异常日仍计入数量。每阶段返回请求/有效观察窗口、完整性、可用性、原因、原始根数、OCR 排除数、价格内点数/稳健中位价、数量样本数/中位数；活动中和活动后的价格变化、在售数量变化分别与各自活动前基线独立比较，并分别返回价格或在售数量比较不可用原因。
 
+WPF 活动观察接入固定查询 `[asOfUtc-30天, asOfUtc+30天)`，客户端只保留 `Holiday`/`SupplyChange`，并按进行中、最近结束、最近开始的优先级选择一个重点活动，只请求一次默认窗口影响结果；`DayNight`/`OcrAnomaly` 不进入玩家日历或走势图。活动 API 独立失败时保留主行情状态；仅当上一份快照属于同一 `server/item` 时才保留同市场上一份活动数据，否则活动数据置空并显示“活动资料暂时不可用”。单个活动阶段少于 3 个有效日线时显示样本不足，不推导必涨必跌或买卖结论。
+
 事件 API 为 `GET /api/v1/markets/{serverId}/{itemId}/events?fromUtc=...&toUtc=...&type=...` 和 `GET /api/v1/markets/{serverId}/{itemId}/events/{eventId}/impact?asOfUtc=...&windowDays=...`。事件列表要求带 offset 的 UTC 时间、范围不超过 366 天，按半开区间重叠过滤并按开始时间/事件 ID 排序；影响查询只读取三阶段所需的有界观察区间，并在数据库条件中截断 `ObservedAtUtc <= asOfUtc`。这些接口只输出研究事实，不输出盈利或买卖结论。
 
-客户端通过接口化 `HttpClient` 消费目录、走势、指标和建议端点；区服/商品路径段必须编码，所有历史时点在请求边界统一为 UTC。第一屏 ViewModel 使用 `Idle/Loading/Ready/Offline/Error` 状态和请求代次，后发请求会取消旧请求，即使旧请求忽略取消也不能覆盖新结果。联网失败时保留最后成功快照并标记陈旧；在线数据年龄超过 `recommendation-rules-v1` 的 48 小时上限也视为陈旧。只有 `Ready`、非陈旧且服务端 `isActionable=true` 时客户端才显示为可执行，否则候选买卖降为观察。
+客户端通过接口化 `HttpClient` 消费目录、走势、指标、建议和事件端点；区服/商品/事件路径段必须编码，所有历史时点在请求边界统一为 UTC。第一屏 ViewModel 使用 `Idle/Loading/Ready/Offline/Error` 状态和请求代次，后发请求会取消旧请求，即使旧请求忽略取消也不能覆盖新结果。联网失败时保留最后成功快照并标记陈旧；在线数据年龄超过 `recommendation-rules-v1` 的 48 小时上限也视为陈旧。只有 `Ready`、非陈旧且服务端 `isActionable=true` 时客户端才显示为可执行，否则候选买卖降为观察。
 
 WPF 启动时先加载 DEMO 目录，再通过首个商品的完整日线末点确定默认历史时点，不硬编码商品 ID 或模拟日期。客户端服务地址默认 `http://localhost:5002/`，可用 `MH_SERVER_BASE_URL` 覆盖；为避免相对 API 路径歧义，覆盖值只接受根路径的绝对 HTTP/HTTPS 地址。价格图使用 WPF 本地自绘，不引入图表包；异常 OCR 日只做显式标记。
 
@@ -95,7 +97,7 @@ dotnet build MH.slnx -c Release
 dotnet test MH.Tests\MH.Tests.csproj -c Release
 ```
 
-阶段 2 额外验证确定性回测、时间边界和离线模式；阶段 3 验证低置信度行为、截图不上传、DPI 和 P95；阶段 4 验证所有停止状态与端到端回放；阶段 5 验证自包含 Windows 发布。
+阶段 2 额外验证确定性回测、时间边界和离线模式。进入阶段 2 的下一个功能节点前，必须先人工验收现有 WPF 第一屏和活动观察卡；若高 DPI、中文字体、滚动、长文本或走势图活动区间存在问题，只修复并复验这些问题，不扩展跨事件或跨区功能。阶段 3 验证低置信度行为、截图不上传、DPI 和 P95；阶段 4 验证所有停止状态与端到端回放；阶段 5 验证自包含 Windows 发布。
 
 ## 9. Git 工作方式
 

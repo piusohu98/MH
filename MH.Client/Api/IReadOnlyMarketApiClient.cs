@@ -1,3 +1,4 @@
+using MH.Core;
 using MH.Core.Contracts;
 using MH.Core.Models;
 
@@ -26,5 +27,21 @@ public interface IReadOnlyMarketApiClient
         string serverId,
         string itemId,
         DateTimeOffset asOfUtc,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<MarketEventDto>> GetEventsAsync(
+        string serverId,
+        string itemId,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        MarketEventType? type = null,
+        CancellationToken cancellationToken = default);
+
+    Task<EventImpactResponse> GetEventImpactAsync(
+        string serverId,
+        string itemId,
+        string eventId,
+        DateTimeOffset asOfUtc,
+        int windowDays = EventImpactAnalyzer.DefaultWindowDays,
         CancellationToken cancellationToken = default);
 }

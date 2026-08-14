@@ -3,8 +3,10 @@ using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using MH.Client.Api;
+using MH.Core;
 using MH.Core.Backtesting;
 using MH.Core.Contracts;
+using MH.Core.Models;
 using MH.Core.Recommendations;
 
 namespace MH.Client.ViewModels;
@@ -13,6 +15,7 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
 {
     private static readonly IReadOnlyList<ServerDto> EmptyServers = Array.Empty<ServerDto>();
     private static readonly IReadOnlyList<ItemDto> EmptyItems = Array.Empty<ItemDto>();
+    private static readonly IReadOnlyList<MarketEventDto> EmptyEvents = Array.Empty<MarketEventDto>();
     private static readonly IReadOnlyList<RecommendationReason> EmptyRecommendationReasons = Array.Empty<RecommendationReason>();
     private static readonly IReadOnlyList<BacktestQualityReason> EmptyGateReasons = Array.Empty<BacktestQualityReason>();
 
@@ -273,6 +276,12 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
 
     public string? ResearchNotice => Snapshot?.Recommendation.ResearchAssumptions.ScopeNotice;
 
+    public IReadOnlyList<MarketEventDto> RelevantEvents => Snapshot?.RelevantEvents ?? EmptyEvents;
+
+    public EventImpactResponse? SelectedEventImpact => Snapshot?.SelectedEventImpact;
+
+    public string? EventResearchError => Snapshot?.EventResearchError;
+
     public bool CanInitialize => State != MarketViewState.Loading;
 
     public bool CanRefresh => CanInitialize
@@ -498,6 +507,97 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
     public string ResearchNoticeText
         => ResearchNotice ?? "只读研究预览；不代表真实获利保证。";
 
+    public string EventCalendarText
+        => RelevantEvents.Count == 0
+            ? "附近没有可展示的节日或供给变化活动。"
+            : string.Join(
+                Environment.NewLine,
+                GetCalendarEvents().Take(5).Select(eventItem =>
+                    $"{GetEventTypeText(eventItem.Type)} · {GetEventLabelText(eventItem)} · {FormatEventDateRange(eventItem)}"));
+
+    public string FocusEventTitleText
+    {
+        get
+        {
+            var eventItem = GetFocusEvent();
+            return eventItem is null ? "暂无重点活动" : GetEventLabelText(eventItem);
+        }
+    }
+
+    public string FocusEventPeriodText
+    {
+        get
+        {
+            var eventItem = GetFocusEvent();
+            if (eventItem is null)
+            {
+                return "没有可比较的重点活动";
+            }
+
+            return $"{GetEventTypeText(eventItem.Type)} · {FormatEventDateRange(eventItem)}";
+        }
+    }
+
+    public string FocusEventStatusText
+    {
+        get
+        {
+            var eventItem = GetFocusEvent();
+            if (eventItem is null)
+            {
+                return "暂无活动";
+            }
+
+            var asOfUtc = (SelectedEventImpact?.AsOfUtc ?? Snapshot?.Indicators.CutoffUtc)?.ToUniversalTime();
+            if (!asOfUtc.HasValue)
+            {
+                return "等待历史时点";
+            }
+
+            return asOfUtc.Value < eventItem.StartsAtUtc.ToUniversalTime()
+                ? "尚未开始"
+                : asOfUtc.Value < eventItem.EndsAtUtc.ToUniversalTime()
+                    ? "进行中，样本仍在积累"
+                    : "已结束，可查看活动后样本";
+        }
+    }
+
+    public string DuringPriceImpactText
+        => FormatEventImpact("活动中常见价", SelectedEventImpact?.During, isVisibleSupply: false);
+
+    public string DuringSupplyImpactText
+        => FormatEventImpact("活动中在售数量", SelectedEventImpact?.During, isVisibleSupply: true);
+
+    public string AfterPriceImpactText
+        => FormatEventImpact("活动后常见价", SelectedEventImpact?.After, isVisibleSupply: false);
+
+    public string AfterSupplyImpactText
+        => FormatEventImpact("活动后在售数量", SelectedEventImpact?.After, isVisibleSupply: true);
+
+    public string EventEvidenceText
+    {
+        get
+        {
+            var impact = SelectedEventImpact;
+            if (impact is null)
+            {
+                return EventResearchError is null ? "暂无重点活动样本。" : "活动样本暂不可用。";
+            }
+
+            return string.Join(
+                Environment.NewLine,
+                FormatPhaseEvidence("活动前", impact.Before),
+                FormatPhaseEvidence("活动中", impact.During),
+                FormatPhaseEvidence("活动后", impact.After));
+        }
+    }
+
+    public string EventResearchNoticeText
+        => "单次历史采集比较，不代表同类活动必然重复，不是买卖建议。";
+
+    public string EventResearchErrorText
+        => EventResearchError ?? string.Empty;
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)
@@ -556,12 +656,18 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
             SelectedAsOfUtc = latestBar.EndUtc.ToUniversalTime();
             var indicators = await apiClient.GetIndicatorsAsync(serverId, itemId, SelectedAsOfUtc.Value, requestCancellation.Token);
             var recommendation = await apiClient.GetRecommendationAsync(serverId, itemId, SelectedAsOfUtc.Value, requestCancellation.Token);
+            var eventData = await LoadEventDataAsync(
+                serverId,
+                itemId,
+                SelectedAsOfUtc.Value,
+                Snapshot,
+                requestCancellation.Token);
             if (!IsCurrent(request.Version))
             {
                 return;
             }
 
-            ApplyLoadedSnapshot(loadedCatalog, series, indicators, recommendation);
+            ApplyLoadedSnapshot(loadedCatalog, series, indicators, recommendation, eventData);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || !IsCurrent(request.Version))
         {
@@ -631,13 +737,19 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
                 requestCancellation.Token);
             var indicators = await apiClient.GetIndicatorsAsync(serverId, itemId, asOfUtc, requestCancellation.Token);
             var recommendation = await apiClient.GetRecommendationAsync(serverId, itemId, asOfUtc, requestCancellation.Token);
+            var eventData = await LoadEventDataAsync(
+                serverId,
+                itemId,
+                asOfUtc,
+                Snapshot,
+                requestCancellation.Token);
 
             if (!IsCurrent(request.Version))
             {
                 return;
             }
 
-            ApplyLoadedSnapshot(catalog, series, indicators, recommendation);
+            ApplyLoadedSnapshot(catalog, series, indicators, recommendation, eventData);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || !IsCurrent(request.Version))
         {
@@ -741,14 +853,127 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         CatalogResponse loadedCatalog,
         MarketSeriesResponse series,
         MarketIndicatorsResponse indicators,
-        RecommendationPreviewResponse recommendation)
+        RecommendationPreviewResponse recommendation,
+        EventLoadResult eventData)
     {
         Catalog = loadedCatalog;
-        Snapshot = new MarketScreenSnapshot(loadedCatalog, series, indicators, recommendation);
+        Snapshot = new MarketScreenSnapshot(
+            loadedCatalog,
+            series,
+            indicators,
+            recommendation,
+            eventData.Events,
+            eventData.Impact,
+            eventData.Error);
         LastSuccessfulAtUtc = utcNow().ToUniversalTime();
         IsStale = indicators.DataAgeHours is > RecommendationRule.MaxDataAgeHours;
         ErrorMessage = null;
         State = MarketViewState.Ready;
+    }
+
+    private async Task<EventLoadResult> LoadEventDataAsync(
+        string serverId,
+        string itemId,
+        DateTimeOffset asOfUtc,
+        MarketScreenSnapshot? previousSnapshot,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var events = await apiClient.GetEventsAsync(
+                serverId,
+                itemId,
+                asOfUtc.AddDays(-30),
+                asOfUtc.AddDays(30),
+                cancellationToken: cancellationToken);
+            if (events is null)
+            {
+                throw new InvalidOperationException("市场服务返回了空活动列表。");
+            }
+
+            var relevantEvents = FilterRelevantEvents(events);
+            var focusEvent = SelectFocusEvent(relevantEvents, asOfUtc);
+            if (focusEvent is null)
+            {
+                return new EventLoadResult(relevantEvents, null, null);
+            }
+
+            var impact = await apiClient.GetEventImpactAsync(
+                serverId,
+                itemId,
+                focusEvent.Id,
+                asOfUtc,
+                EventImpactAnalyzer.DefaultWindowDays,
+                cancellationToken);
+            if (impact is null)
+            {
+                throw new InvalidOperationException("市场服务返回了空活动影响结果。");
+            }
+
+            return new EventLoadResult(relevantEvents, impact, null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (IsOptionalEventFailure(exception, cancellationToken))
+        {
+            if (previousSnapshot is { } prior
+                && string.Equals(prior.Series.ServerId, serverId, StringComparison.Ordinal)
+                && string.Equals(prior.Series.ItemId, itemId, StringComparison.Ordinal))
+            {
+                return new EventLoadResult(
+                    prior.RelevantEvents,
+                    prior.SelectedEventImpact,
+                    "活动资料暂时不可用，显示上次成功结果。");
+            }
+
+            return new EventLoadResult(EmptyEvents, null, "活动资料暂时不可用。");
+        }
+    }
+
+    public static IReadOnlyList<MarketEventDto> FilterRelevantEvents(IEnumerable<MarketEventDto> events)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        return events
+            .Where(eventItem => eventItem.Type is MarketEventType.Holiday or MarketEventType.SupplyChange)
+            .OrderBy(eventItem => eventItem.StartsAtUtc.ToUniversalTime())
+            .ThenBy(eventItem => eventItem.Id, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    public static MarketEventDto? SelectFocusEvent(
+        IEnumerable<MarketEventDto> events,
+        DateTimeOffset asOfUtc)
+    {
+        return OrderRelevantEvents(events, asOfUtc).FirstOrDefault();
+    }
+
+    public static IReadOnlyList<MarketEventDto> OrderRelevantEvents(
+        IEnumerable<MarketEventDto> events,
+        DateTimeOffset asOfUtc)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+        var cutoffUtc = asOfUtc.ToUniversalTime();
+        var relevant = events
+            .Where(eventItem => eventItem.Type is MarketEventType.Holiday or MarketEventType.SupplyChange)
+            .Select(eventItem => (Event: eventItem, StartUtc: eventItem.StartsAtUtc.ToUniversalTime(), EndUtc: eventItem.EndsAtUtc.ToUniversalTime()))
+            .ToArray();
+
+        return relevant
+            .Where(item => item.StartUtc <= cutoffUtc && cutoffUtc < item.EndUtc)
+            .OrderByDescending(item => item.StartUtc)
+            .ThenBy(item => item.Event.Id, StringComparer.Ordinal)
+            .Concat(relevant
+                .Where(item => item.EndUtc <= cutoffUtc)
+                .OrderByDescending(item => item.EndUtc)
+                .ThenBy(item => item.Event.Id, StringComparer.Ordinal))
+            .Concat(relevant
+                .Where(item => item.StartUtc > cutoffUtc)
+                .OrderBy(item => item.StartUtc)
+                .ThenBy(item => item.Event.Id, StringComparer.Ordinal))
+            .Select(item => item.Event)
+            .ToArray();
     }
 
     private void ApplyNoDataError(string message)
@@ -829,9 +1054,137 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(InvalidationConditionsText));
         OnPropertyChanged(nameof(GateSummaryText));
         OnPropertyChanged(nameof(ResearchNoticeText));
+        OnPropertyChanged(nameof(RelevantEvents));
+        OnPropertyChanged(nameof(SelectedEventImpact));
+        OnPropertyChanged(nameof(EventResearchError));
+        OnPropertyChanged(nameof(EventCalendarText));
+        OnPropertyChanged(nameof(FocusEventTitleText));
+        OnPropertyChanged(nameof(FocusEventPeriodText));
+        OnPropertyChanged(nameof(FocusEventStatusText));
+        OnPropertyChanged(nameof(DuringPriceImpactText));
+        OnPropertyChanged(nameof(DuringSupplyImpactText));
+        OnPropertyChanged(nameof(AfterPriceImpactText));
+        OnPropertyChanged(nameof(AfterSupplyImpactText));
+        OnPropertyChanged(nameof(EventEvidenceText));
+        OnPropertyChanged(nameof(EventResearchNoticeText));
+        OnPropertyChanged(nameof(EventResearchErrorText));
         OnPropertyChanged(nameof(CanInitialize));
         OnPropertyChanged(nameof(CanRefresh));
     }
+
+    private MarketEventDto? GetFocusEvent()
+    {
+        if (SelectedEventImpact is { } impact)
+        {
+            return impact.Event;
+        }
+
+        var cutoffUtc = Snapshot?.Indicators.CutoffUtc;
+        return cutoffUtc.HasValue ? SelectFocusEvent(RelevantEvents, cutoffUtc.Value) : null;
+    }
+
+    private IEnumerable<MarketEventDto> GetCalendarEvents()
+    {
+        var cutoffUtc = SelectedEventImpact?.AsOfUtc ?? Snapshot?.Indicators.CutoffUtc;
+        if (!cutoffUtc.HasValue)
+        {
+            return RelevantEvents;
+        }
+
+        return OrderRelevantEvents(RelevantEvents, cutoffUtc.Value);
+    }
+
+    private static string FormatEventImpact(
+        string label,
+        EventImpactPhaseResult? phase,
+        bool isVisibleSupply)
+    {
+        if (phase is null)
+        {
+            return $"{label}：暂不可比较（暂无重点活动影响资料）";
+        }
+
+        var change = isVisibleSupply
+            ? phase.VisibleSupplyChangeVsBefore
+            : phase.PriceChangeVsBefore;
+        if (!change.HasValue)
+        {
+            var reason = isVisibleSupply
+                ? phase.VisibleSupplyComparisonUnavailableReason
+                : phase.PriceComparisonUnavailableReason;
+            return $"{label}：暂不可比较（{GetComparisonReasonText(reason)}）";
+        }
+
+        var direction = Math.Abs(change.Value) < 0.01m
+            ? "接近活动前"
+            : change.Value > 0
+                ? isVisibleSupply ? "多于活动前" : "高于活动前"
+                : isVisibleSupply ? "少于活动前" : "低于活动前";
+        return $"{label}：{direction}（{FormatSignedPercent(change.Value)}）";
+    }
+
+    private static string FormatPhaseEvidence(string label, EventImpactPhaseResult phase)
+        => $"{label}：{GetAvailabilityText(phase.Availability)} · 原始日线 {phase.RawBarCount} · 价格内点 {phase.PriceInlierCount} · 在售数量样本 {phase.VolumeSampleCount}";
+
+    private static string GetComparisonReasonText(string? reason)
+        => reason switch
+        {
+            "baseline-price-unavailable" => "活动前价格样本不足",
+            "phase-price-unavailable" => "本阶段价格样本不足",
+            "baseline-visible-supply-unavailable" => "活动前在售数量样本不足或基线为零",
+            "phase-visible-supply-unavailable" => "本阶段在售数量样本不足",
+            _ => "样本不足，暂不可比较"
+        };
+
+    private static string GetAvailabilityText(EventImpactAvailability availability)
+        => availability switch
+        {
+            EventImpactAvailability.Available => "样本可用",
+            EventImpactAvailability.Partial => "进行中，样本仍在积累",
+            EventImpactAvailability.NotStarted => "尚未开始",
+            EventImpactAvailability.InsufficientData => "样本不足",
+            _ => "样本不足"
+        };
+
+    private static string GetEventTypeText(MarketEventType type)
+        => type switch
+        {
+            MarketEventType.Holiday => "节日活动",
+            MarketEventType.SupplyChange => "供给变化",
+            _ => "活动"
+        };
+
+    private static string GetEventLabelText(MarketEventDto eventItem)
+    {
+        if (eventItem.CatalogKind == CatalogKind.Demo)
+        {
+            return eventItem.Label switch
+            {
+                "DEMO Festival" => "模拟节日",
+                "DEMO Supply Shortage" => "模拟供应减少",
+                "DEMO Supply Surplus" => "模拟供应增加",
+                _ => eventItem.Label
+            };
+        }
+
+        return eventItem.Label;
+    }
+
+    private static string FormatEventDateRange(MarketEventDto eventItem)
+    {
+        var start = eventItem.StartsAtUtc.ToUniversalTime().ToLocalTime();
+        var end = eventItem.EndsAtUtc.ToUniversalTime().ToLocalTime();
+        return $"{start:yyyy-MM-dd HH:mm} ~ {end:yyyy-MM-dd HH:mm}";
+    }
+
+    private static string FormatSignedPercent(decimal value)
+        => $"{(value >= 0 ? "+" : string.Empty)}{value.ToString("P1", CultureInfo.InvariantCulture).Replace(" ", string.Empty, StringComparison.Ordinal)}";
+
+    private static bool IsOptionalEventFailure(Exception exception, CancellationToken cancellationToken)
+        => exception is HttpRequestException
+            or JsonException
+            or InvalidOperationException
+            || exception is TaskCanceledException && !cancellationToken.IsCancellationRequested;
 
     private PriceBarDto? GetLatestBar()
         => Snapshot?.Series.Bars
@@ -880,4 +1233,9 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
 
     private void OnPropertyChanged(string? propertyName = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+
+    private sealed record EventLoadResult(
+        IReadOnlyList<MarketEventDto> Events,
+        EventImpactResponse? Impact,
+        string? Error);
 }

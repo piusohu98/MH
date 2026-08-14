@@ -15,4 +15,7 @@ public sealed record MarketScreenSnapshot(
     CatalogResponse Catalog,
     MarketSeriesResponse Series,
     MarketIndicatorsResponse Indicators,
-    RecommendationPreviewResponse Recommendation);
+    RecommendationPreviewResponse Recommendation,
+    IReadOnlyList<MarketEventDto> RelevantEvents,
+    EventImpactResponse? SelectedEventImpact,
+    string? EventResearchError);

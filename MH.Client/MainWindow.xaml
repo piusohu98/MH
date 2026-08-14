@@ -168,11 +168,44 @@
                                 <TextBlock FontSize="17" FontWeight="SemiBold" Text="价格走势（最近采集日线）" />
                                 <TextBlock DockPanel.Dock="Right" Style="{StaticResource MutedText}" Text="{Binding SelectedAsOfDisplayText}" />
                             </DockPanel>
-                            <TextBlock Margin="0,0,0,10" Style="{StaticResource MutedText}" Text="用于观察价格方向；红点表示识别结果可能有误，虚线是近 7 天常见价。" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,0,0,10" Style="{StaticResource MutedText}" Text="用于观察价格方向；红点表示识别结果可能有误，虚线是近 7 天常见价，淡色背景表示节日或供给变化。" TextWrapping="Wrap" />
                             <controls:PriceChart Height="270"
                                                   Bars="{Binding Snapshot.Series.Bars}"
-                                                  CommonPrice7Days="{Binding Snapshot.Indicators.RobustMedian7Days}" />
+                                                  CommonPrice7Days="{Binding Snapshot.Indicators.RobustMedian7Days}"
+                                                  Events="{Binding Snapshot.RelevantEvents}" />
                             <TextBlock Margin="0,10,0,0" Style="{StaticResource MutedText}" Text="{Binding OcrAnomalyText}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock FontSize="17" FontWeight="SemiBold" Text="活动观察" />
+                                <TextBlock DockPanel.Dock="Right" Style="{StaticResource MutedText}" Text="单次历史比较" />
+                            </DockPanel>
+                            <TextBlock FontSize="19" FontWeight="SemiBold" Text="{Binding FocusEventTitleText}" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,4,0,0" Style="{StaticResource MutedText}" Text="{Binding FocusEventPeriodText}" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,4,0,0" Text="{Binding FocusEventStatusText}" />
+                            <TextBlock Margin="0,6,0,0" Foreground="#FCA5A5" Text="{Binding EventResearchErrorText}" TextWrapping="Wrap" />
+                            <UniformGrid Columns="2" Margin="0,12,0,0">
+                                <Border Margin="0,0,8,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                    <TextBlock Text="{Binding DuringPriceImpactText}" TextWrapping="Wrap" />
+                                </Border>
+                                <Border Margin="0,0,0,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                    <TextBlock Text="{Binding DuringSupplyImpactText}" TextWrapping="Wrap" />
+                                </Border>
+                                <Border Margin="0,0,8,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                    <TextBlock Text="{Binding AfterPriceImpactText}" TextWrapping="Wrap" />
+                                </Border>
+                                <Border Margin="0,0,0,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                    <TextBlock Text="{Binding AfterSupplyImpactText}" TextWrapping="Wrap" />
+                                </Border>
+                            </UniformGrid>
+                            <TextBlock Margin="0,2,0,0" Style="{StaticResource MutedText}" Text="样本说明" />
+                            <TextBlock Margin="0,4,0,0" Text="{Binding EventEvidenceText}" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,10,0,0" Style="{StaticResource MutedText}" Text="活动日历（最多 5 项）" />
+                            <TextBlock Margin="0,4,0,0" Text="{Binding EventCalendarText}" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,10,0,0" Style="{StaticResource MutedText}" Text="{Binding EventResearchNoticeText}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
 

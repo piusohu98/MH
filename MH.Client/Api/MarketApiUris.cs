@@ -1,4 +1,5 @@
 using System.Globalization;
+using MH.Core;
 using MH.Core.Models;
 
 namespace MH.Client.Api;
@@ -37,6 +38,39 @@ public static class MarketApiUris
         => Build(
             $"/api/v1/markets/{Segment(serverId)}/{Segment(itemId)}/recommendation",
             [Query("asOfUtc", FormatUtc(asOfUtc))]);
+
+    public static Uri Events(
+        string serverId,
+        string itemId,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        MarketEventType? type = null)
+    {
+        var query = new List<string>
+        {
+            Query("fromUtc", FormatUtc(fromUtc)),
+            Query("toUtc", FormatUtc(toUtc))
+        };
+        if (type.HasValue)
+        {
+            query.Add(Query("type", type.Value.ToString()));
+        }
+
+        return Build($"/api/v1/markets/{Segment(serverId)}/{Segment(itemId)}/events", query);
+    }
+
+    public static Uri EventImpact(
+        string serverId,
+        string itemId,
+        string eventId,
+        DateTimeOffset asOfUtc,
+        int windowDays = EventImpactAnalyzer.DefaultWindowDays)
+        => Build(
+            $"/api/v1/markets/{Segment(serverId)}/{Segment(itemId)}/events/{Segment(eventId)}/impact",
+            [
+                Query("asOfUtc", FormatUtc(asOfUtc)),
+                Query("windowDays", windowDays.ToString(CultureInfo.InvariantCulture))
+            ]);
 
     private static string Segment(string value)
     {

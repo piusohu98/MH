@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using MH.Client.Api;
 using MH.Client.ViewModels;
+using MH.Core;
 using MH.Core.Backtesting;
 using MH.Core.Contracts;
 using MH.Core.Models;
@@ -14,9 +15,23 @@ public sealed class ClientApiTests
     private static readonly DateTimeOffset AsOfUtc = new(2025, 1, 2, 3, 4, 5, TimeSpan.Zero);
 
     [Fact]
-    public async Task HttpClientLoadsAllFourReadOnlyEndpoints()
+    public async Task HttpClientLoadsCoreAndEventReadOnlyEndpoints()
     {
-        var handler = new RecordingHandler(CreateCatalog(), CreateSeries(), CreateIndicators(), CreatePreview());
+        var handler = new RecordingHandler(
+            CreateCatalog(),
+            CreateSeries(),
+            CreateIndicators(),
+            CreatePreview(),
+            [new MarketEventDto(
+                "活动 1",
+                "服务器 1",
+                "商品 中文",
+                MarketEventType.Holiday,
+                "DEMO Festival",
+                AsOfUtc.AddDays(-1),
+                AsOfUtc.AddDays(1),
+                CatalogKind.Demo)],
+            FakeMarketApi.CreateEventImpact("活动 1", AsOfUtc));
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://localhost/") };
         var api = new HttpMarketApiClient(httpClient);
         using var cancellation = new CancellationTokenSource();
@@ -25,12 +40,28 @@ public sealed class ClientApiTests
         var series = await api.GetSeriesAsync("服务器 1", "商品 中文", AsOfUtc.AddDays(-30), AsOfUtc, cancellation.Token);
         var indicators = await api.GetIndicatorsAsync("服务器 1", "商品 中文", AsOfUtc, cancellation.Token);
         var recommendation = await api.GetRecommendationAsync("服务器 1", "商品 中文", AsOfUtc, cancellation.Token);
+        var events = await api.GetEventsAsync(
+            "服务器 1",
+            "商品 中文",
+            AsOfUtc.AddDays(-30),
+            AsOfUtc.AddDays(30),
+            MarketEventType.Holiday,
+            cancellation.Token);
+        var impact = await api.GetEventImpactAsync(
+            "服务器 1",
+            "商品 中文",
+            "活动 1",
+            AsOfUtc,
+            cancellationToken: cancellation.Token);
 
         Assert.Equal(CatalogKind.Demo, catalog.CatalogKind);
         Assert.Equal("服务器 1", series.ServerId);
         Assert.Equal("服务器 1", indicators.ServerId);
         Assert.Equal("服务器 1", recommendation.ServerId);
-        Assert.Equal(4, handler.Requests.Count);
+        Assert.Single(events);
+        Assert.Equal("活动 1", impact.Event.Id);
+        Assert.Equal(6, handler.Requests.Count);
+        Assert.All(handler.CancellationTokens, token => Assert.True(token.CanBeCanceled));
 
         var seriesRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/series", StringComparison.Ordinal));
         Assert.DoesNotContain(" ", seriesRequest.AbsolutePath);
@@ -40,6 +71,15 @@ public sealed class ClientApiTests
 
         var recommendationRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/recommendation", StringComparison.Ordinal));
         Assert.Contains("asOfUtc=2025-01-02T03%3A04%3A05.0000000Z", recommendationRequest.Query, StringComparison.OrdinalIgnoreCase);
+
+        var eventsRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/events", StringComparison.Ordinal));
+        Assert.Contains("fromUtc=2024-12-03T03%3A04%3A05.0000000Z", eventsRequest.Query, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("toUtc=2025-02-01T03%3A04%3A05.0000000Z", eventsRequest.Query, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("type=Holiday", eventsRequest.Query, StringComparison.Ordinal);
+
+        var impactRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/impact", StringComparison.Ordinal));
+        Assert.Contains("%E6%B4%BB%E5%8A%A8%201", impactRequest.AbsolutePath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("windowDays=7", impactRequest.Query, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -56,6 +96,52 @@ public sealed class ClientApiTests
         Assert.Contains("%E6%9C%8D", uri.OriginalString, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("%E5%95%86", uri.OriginalString, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("asOfUtc=2025-01-01T19%3A04%3A05.0000000Z", uri.OriginalString, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EventUrisEncodeSegmentsNormalizeUtcAndIncludeTypeAndDefaultWindow()
+    {
+        var events = MarketApiUris.Events(
+            "服务器 1",
+            "商品 中文",
+            new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.FromHours(8)),
+            new DateTimeOffset(2025, 2, 1, 0, 0, 0, TimeSpan.FromHours(8)),
+            MarketEventType.SupplyChange);
+        var impact = MarketApiUris.EventImpact(
+            "服务器 1",
+            "商品 中文",
+            "活动 1",
+            new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.FromHours(8)));
+
+        Assert.DoesNotContain(" ", events.OriginalString);
+        Assert.DoesNotContain("服务器", events.OriginalString);
+        Assert.DoesNotContain("商品", events.OriginalString);
+        Assert.Contains("fromUtc=2024-12-31T16%3A00%3A00.0000000Z", events.OriginalString, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("toUtc=2025-01-31T16%3A00%3A00.0000000Z", events.OriginalString, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("type=SupplyChange", events.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("windowDays=7", impact.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("asOfUtc=2025-01-01T19%3A04%3A05.0000000Z", impact.OriginalString, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task HttpClientCancellationStopsEventRequest()
+    {
+        var handler = new BlockingHandler();
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://localhost/") };
+        var api = new HttpMarketApiClient(httpClient);
+        using var cancellation = new CancellationTokenSource();
+
+        var pending = api.GetEventsAsync(
+            "server-1",
+            "item-1",
+            AsOfUtc.AddDays(-1),
+            AsOfUtc,
+            cancellationToken: cancellation.Token);
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await pending);
+        Assert.True(handler.ObservedToken.CanBeCanceled);
     }
 
     private static CatalogResponse CreateCatalog()
@@ -140,14 +226,18 @@ public sealed class ClientApiTests
         CatalogResponse catalog,
         MarketSeriesResponse series,
         MarketIndicatorsResponse indicators,
-        RecommendationPreviewResponse recommendation) : HttpMessageHandler
+        RecommendationPreviewResponse recommendation,
+        IReadOnlyList<MarketEventDto> events,
+        EventImpactResponse eventImpact) : HttpMessageHandler
     {
         public List<Uri> Requests { get; } = [];
+        public List<CancellationToken> CancellationTokens { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var requestUri = request.RequestUri ?? throw new InvalidOperationException("Request URI was not set.");
             Requests.Add(requestUri);
+            CancellationTokens.Add(cancellationToken);
             var path = requestUri.AbsolutePath;
             object response = path.EndsWith("/catalog", StringComparison.Ordinal)
                 ? catalog
@@ -155,11 +245,31 @@ public sealed class ClientApiTests
                     ? series
                     : path.EndsWith("/indicators", StringComparison.Ordinal)
                         ? indicators
-                        : recommendation;
+                        : path.EndsWith("/recommendation", StringComparison.Ordinal)
+                            ? recommendation
+                            : path.EndsWith("/events", StringComparison.Ordinal)
+                                ? events
+                                : eventImpact;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = JsonContent.Create(response)
             });
+        }
+    }
+
+    private sealed class BlockingHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource<bool> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public CancellationToken ObservedToken { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            ObservedToken = cancellationToken;
+            Started.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 }
@@ -520,11 +630,17 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     private readonly object sync = new();
     private readonly List<TaskCompletionSource<RecommendationPreviewResponse>> recommendationRequests = [];
     private readonly Dictionary<int, TaskCompletionSource<bool>> requestWaiters = [];
+    private readonly List<TaskCompletionSource<EventImpactResponse>> eventImpactRequests = [];
+    private readonly Dictionary<int, TaskCompletionSource<bool>> eventImpactWaiters = [];
 
     public Exception? Failure { get; set; }
+    public Exception? EventsFailure { get; set; }
+    public Exception? EventImpactFailure { get; set; }
     public CatalogResponse? Catalog { get; set; }
     public MarketSeriesResponse? Series { get; set; }
     public RecommendationPreviewResponse? Preview { get; set; }
+    public IReadOnlyList<MarketEventDto>? Events { get; set; }
+    public EventImpactResponse? EventImpact { get; set; }
     public decimal DataAgeHours { get; set; } = 12.5m;
     public decimal? RobustMedian7Days { get; set; } = 100m;
     public decimal? Return7Days { get; set; } = 0.05m;
@@ -532,12 +648,16 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public decimal? VisibleSupplyChange7Days { get; set; } = -0.1m;
     public bool BlockCatalog { get; set; }
     public bool BlockRecommendation { get; set; }
+    public bool BlockEventImpact { get; set; }
     public int CatalogCalls { get; private set; }
     public int SeriesCalls { get; private set; }
     public int IndicatorsCalls { get; private set; }
     public int RecommendationCalls { get; private set; }
-    public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls;
+    public int EventsCalls { get; private set; }
+    public int EventImpactCalls { get; private set; }
+    public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls + EventsCalls + EventImpactCalls;
     public List<(string ServerId, string ItemId, DateTimeOffset? FromUtc, DateTimeOffset? ToUtc)> SeriesRequests { get; } = [];
+    public List<(string ServerId, string ItemId, DateTimeOffset FromUtc, DateTimeOffset ToUtc, MarketEventType? Type)> EventRequests { get; } = [];
     public TaskCompletionSource<bool> CatalogStarted { get; } = NewCompletionSource<bool>();
     private TaskCompletionSource<CatalogResponse> CatalogGate { get; } = NewCompletionSource<CatalogResponse>();
 
@@ -614,6 +734,53 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
         }
     }
 
+    public Task<IReadOnlyList<MarketEventDto>> GetEventsAsync(
+        string serverId,
+        string itemId,
+        DateTimeOffset fromUtc,
+        DateTimeOffset toUtc,
+        MarketEventType? type,
+        CancellationToken cancellationToken)
+    {
+        EventsCalls++;
+        EventRequests.Add((serverId, itemId, fromUtc, toUtc, type));
+        return EventsFailure is null
+            ? Task.FromResult<IReadOnlyList<MarketEventDto>>(Events ?? [])
+            : Task.FromException<IReadOnlyList<MarketEventDto>>(EventsFailure);
+    }
+
+    public Task<EventImpactResponse> GetEventImpactAsync(
+        string serverId,
+        string itemId,
+        string eventId,
+        DateTimeOffset asOfUtc,
+        int windowDays = EventImpactAnalyzer.DefaultWindowDays,
+        CancellationToken cancellationToken = default)
+    {
+        EventImpactCalls++;
+        if (EventImpactFailure is not null)
+        {
+            return Task.FromException<EventImpactResponse>(EventImpactFailure);
+        }
+
+        if (!BlockEventImpact)
+        {
+            return Task.FromResult(EventImpact ?? CreateEventImpact(eventId, asOfUtc));
+        }
+
+        lock (sync)
+        {
+            var request = NewCompletionSource<EventImpactResponse>();
+            eventImpactRequests.Add(request);
+            foreach (var waiter in eventImpactWaiters.Where(pair => eventImpactRequests.Count >= pair.Key).Select(pair => pair.Value))
+            {
+                waiter.TrySetResult(true);
+            }
+
+            return request.Task;
+        }
+    }
+
     public Task WaitForRecommendationCountAsync(int count)
     {
         lock (sync)
@@ -634,6 +801,29 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
         lock (sync)
         {
             recommendationRequests[index].TrySetResult(response);
+        }
+    }
+
+    public Task WaitForEventImpactCountAsync(int count)
+    {
+        lock (sync)
+        {
+            if (eventImpactRequests.Count >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var waiter = NewCompletionSource<bool>();
+            eventImpactWaiters[count] = waiter;
+            return waiter.Task;
+        }
+    }
+
+    public void CompleteEventImpact(int index, EventImpactResponse response)
+    {
+        lock (sync)
+        {
+            eventImpactRequests[index].TrySetResult(response);
         }
     }
 
@@ -669,6 +859,59 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
             gate,
             new RecommendationPreviewResearchAssumptions(100_000m, 0.01m, 0.005m, 3, 40, 30, "只读研究预览；不代表真实获利保证。"));
     }
+
+    public static EventImpactResponse CreateEventImpact(
+        string eventId,
+        DateTimeOffset asOfUtc,
+        int rawBarCount = 3)
+    {
+        var eventItem = new MarketEventDto(
+            eventId,
+            "server-1",
+            "item-1",
+            MarketEventType.Holiday,
+            "DEMO Festival",
+            asOfUtc.AddDays(-1),
+            asOfUtc.AddDays(1),
+            CatalogKind.Demo);
+        var before = CreateEventPhase(EventImpactPhase.Before, asOfUtc, rawBarCount);
+        var during = CreateEventPhase(EventImpactPhase.During, asOfUtc, rawBarCount) with
+        {
+            PriceChangeVsBefore = 0.1m,
+            VisibleSupplyChangeVsBefore = 0.2m
+        };
+        var after = CreateEventPhase(EventImpactPhase.After, asOfUtc, rawBarCount) with
+        {
+            PriceChangeVsBefore = -0.05m,
+            VisibleSupplyChangeVsBefore = -0.1m
+        };
+        return new EventImpactResponse(eventItem, asOfUtc, EventImpactAnalyzer.DefaultWindowDays, before, during, after);
+    }
+
+    private static EventImpactPhaseResult CreateEventPhase(
+        EventImpactPhase phase,
+        DateTimeOffset asOfUtc,
+        int rawBarCount)
+        => new(
+            phase,
+            asOfUtc.AddDays(-7),
+            asOfUtc,
+            asOfUtc.AddDays(-1),
+            asOfUtc,
+            true,
+            EventImpactAvailability.Available,
+            null,
+            rawBarCount,
+            0,
+            rawBarCount,
+            0m,
+            100m,
+            rawBarCount,
+            20m,
+            null,
+            null,
+            null,
+            null);
 
     private static CatalogResponse CreateCatalog()
         => new(
