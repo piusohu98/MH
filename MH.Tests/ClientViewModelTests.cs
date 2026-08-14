@@ -346,6 +346,165 @@ public sealed class FirstScreenViewModelTests
         Assert.True(viewModel.IsActionable);
     }
 
+    [Fact]
+    public async Task InitializeSelectsCatalogEntriesAndUsesLatestBarAsOf()
+    {
+        var latestEndUtc = AsOfUtc.AddDays(2);
+        var api = new FakeMarketApi
+        {
+            Series = new MarketSeriesResponse(
+                "server-1",
+                "item-1",
+                null,
+                null,
+                [
+                    new PriceBarDto(AsOfUtc.AddDays(-1), AsOfUtc, 100, 110, 90, 105, 10, false),
+                    new PriceBarDto(AsOfUtc.AddDays(1), latestEndUtc, 106, 115, 100, 112, 12, true)
+                ])
+        };
+        var viewModel = CreateViewModel(api);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.Equal("server-1", viewModel.SelectedServerId);
+        Assert.Equal("item-1", viewModel.SelectedItemId);
+        Assert.Equal(latestEndUtc, viewModel.SelectedAsOfUtc);
+        Assert.Equal(1, api.CatalogCalls);
+        Assert.Equal(1, api.SeriesCalls);
+        Assert.Equal(1, api.IndicatorsCalls);
+        Assert.Equal(1, api.RecommendationCalls);
+        Assert.Null(api.SeriesRequests.Single().FromUtc);
+        Assert.Null(api.SeriesRequests.Single().ToUtc);
+        Assert.NotNull(viewModel.Snapshot);
+    }
+
+    [Fact]
+    public async Task InitializeEmptyCatalogEntersErrorWithoutHardcodedSelection()
+    {
+        var api = new FakeMarketApi
+        {
+            Catalog = new CatalogResponse(CatalogKind.Demo, [], [])
+        };
+        var viewModel = new FirstScreenViewModel(api, () => LastSuccessUtc);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Equal(MarketViewState.Error, viewModel.State);
+        Assert.Null(viewModel.SelectedServerId);
+        Assert.Null(viewModel.SelectedItemId);
+        Assert.Equal(1, api.CatalogCalls);
+        Assert.Equal(0, api.SeriesCalls);
+        Assert.Equal(0, api.IndicatorsCalls);
+        Assert.Equal(0, api.RecommendationCalls);
+        Assert.Contains("目录", viewModel.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InitializeWithoutBarsDoesNotRequestIndicatorsOrRecommendation()
+    {
+        var api = new FakeMarketApi
+        {
+            Series = new MarketSeriesResponse("server-1", "item-1", null, null, [])
+        };
+        var viewModel = new FirstScreenViewModel(api, () => LastSuccessUtc);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Equal(MarketViewState.Error, viewModel.State);
+        Assert.Contains("历史行情", viewModel.ErrorMessage, StringComparison.Ordinal);
+        Assert.Equal(1, api.CatalogCalls);
+        Assert.Equal(1, api.SeriesCalls);
+        Assert.Equal(0, api.IndicatorsCalls);
+        Assert.Equal(0, api.RecommendationCalls);
+    }
+
+    [Fact]
+    public async Task InitializeFirstNetworkFailureEntersError()
+    {
+        var api = new FakeMarketApi { Failure = new HttpRequestException("offline") };
+        var viewModel = new FirstScreenViewModel(api, () => LastSuccessUtc);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Equal(MarketViewState.Error, viewModel.State);
+        Assert.Null(viewModel.Snapshot);
+        Assert.False(string.IsNullOrWhiteSpace(viewModel.ErrorMessage));
+    }
+
+    [Fact]
+    public async Task InitializeCanBeRetriedAfterFirstNetworkFailure()
+    {
+        var api = new FakeMarketApi { Failure = new HttpRequestException("offline") };
+        var viewModel = new FirstScreenViewModel(api, () => LastSuccessUtc);
+
+        await viewModel.InitializeAsync();
+        Assert.Equal(MarketViewState.Error, viewModel.State);
+
+        api.Failure = null;
+        await viewModel.InitializeAsync();
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.NotNull(viewModel.Snapshot);
+        Assert.Equal(2, api.CatalogCalls);
+    }
+
+    [Fact]
+    public async Task InvalidAsOfTextDisablesRefreshAndRetainsSnapshot()
+    {
+        var api = new FakeMarketApi();
+        var viewModel = CreateViewModel(api);
+        await viewModel.RefreshAsync();
+        var previousSnapshot = viewModel.Snapshot;
+        Assert.NotNull(previousSnapshot);
+        Assert.True(viewModel.CanRefresh);
+
+        viewModel.SelectedAsOfUtcText = "not-a-timestamp";
+
+        Assert.False(viewModel.CanRefresh);
+        Assert.True(viewModel.CanInitialize);
+        Assert.Same(previousSnapshot, viewModel.Snapshot);
+        await viewModel.RefreshAsync();
+        Assert.Same(previousSnapshot, viewModel.Snapshot);
+    }
+
+    [Fact]
+    public async Task InitializeCallerCancellationDoesNotBecomeAnError()
+    {
+        var api = new FakeMarketApi { BlockCatalog = true };
+        var viewModel = new FirstScreenViewModel(api, () => LastSuccessUtc);
+        using var cancellation = new CancellationTokenSource();
+
+        var initialize = viewModel.InitializeAsync(cancellation.Token);
+        await api.CatalogStarted.Task;
+        cancellation.Cancel();
+        await initialize;
+
+        Assert.Equal(MarketViewState.Idle, viewModel.State);
+        Assert.Null(viewModel.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task NewerRefreshWinsOverOlderInitialization()
+    {
+        var api = new FakeMarketApi { BlockRecommendation = true };
+        var viewModel = CreateViewModel(api);
+
+        var initialize = viewModel.InitializeAsync();
+        await api.WaitForRecommendationCountAsync(1);
+        var refresh = viewModel.RefreshAsync();
+        await api.WaitForRecommendationCountAsync(2);
+
+        api.CompleteRecommendation(1, FakeMarketApi.CreatePreview(RecommendationAction.CandidateBuy, true, BacktestQualityStatus.TrialEligible));
+        await refresh;
+        api.CompleteRecommendation(0, FakeMarketApi.CreatePreview(RecommendationAction.CandidateSell, false));
+        await initialize;
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.Equal(RecommendationAction.CandidateBuy, viewModel.RawRecommendationAction);
+        Assert.True(viewModel.IsActionable);
+    }
+
     private static FirstScreenViewModel CreateViewModel(FakeMarketApi api)
         => new(api, () => LastSuccessUtc)
         {
@@ -363,6 +522,8 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     private readonly Dictionary<int, TaskCompletionSource<bool>> requestWaiters = [];
 
     public Exception? Failure { get; set; }
+    public CatalogResponse? Catalog { get; set; }
+    public MarketSeriesResponse? Series { get; set; }
     public RecommendationPreviewResponse? Preview { get; set; }
     public decimal DataAgeHours { get; set; } = 12.5m;
     public bool BlockCatalog { get; set; }
@@ -372,6 +533,7 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public int IndicatorsCalls { get; private set; }
     public int RecommendationCalls { get; private set; }
     public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls;
+    public List<(string ServerId, string ItemId, DateTimeOffset? FromUtc, DateTimeOffset? ToUtc)> SeriesRequests { get; } = [];
     public TaskCompletionSource<bool> CatalogStarted { get; } = NewCompletionSource<bool>();
     private TaskCompletionSource<CatalogResponse> CatalogGate { get; } = NewCompletionSource<CatalogResponse>();
 
@@ -385,7 +547,7 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
 
         if (!BlockCatalog)
         {
-            return Task.FromResult(CreateCatalog());
+            return Task.FromResult(Catalog ?? CreateCatalog());
         }
 
         CatalogStarted.TrySetResult(true);
@@ -400,8 +562,9 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
         CancellationToken cancellationToken)
     {
         SeriesCalls++;
+        SeriesRequests.Add((serverId, itemId, fromUtc, toUtc));
         return Failure is null
-            ? Task.FromResult(CreateSeries(serverId, itemId))
+            ? Task.FromResult(Series ?? CreateSeries(serverId, itemId))
             : Task.FromException<MarketSeriesResponse>(Failure);
     }
 

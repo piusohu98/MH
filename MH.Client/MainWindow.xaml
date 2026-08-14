@@ -1,12 +1,248 @@
-﻿<Window x:Class="MH.Client.MainWindow"
+<Window x:Class="MH.Client.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:MH.Client"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        xmlns:controls="clr-namespace:MH.Client.Controls"
+        xmlns:viewModels="clr-namespace:MH.Client.ViewModels"
+        Title="MH 市场监控"
+        Width="1180"
+        Height="760"
+        MinWidth="960"
+        MinHeight="620"
+        WindowStartupLocation="CenterScreen"
+        Background="#0B1220"
+        Foreground="#E5E7EB"
+        Loaded="Window_Loaded">
+    <Window.Resources>
+        <Style x:Key="CardBorder" TargetType="Border">
+            <Setter Property="Background" Value="#162033" />
+            <Setter Property="BorderBrush" Value="#263653" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="16" />
+        </Style>
+        <Style x:Key="MutedText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#94A3B8" />
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="MinWidth" Value="180" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="Margin" Value="0,5,16,0" />
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="Margin" Value="0,5,16,0" />
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="18,8" />
+            <Setter Property="Margin" Value="0,5,0,0" />
+            <Setter Property="Background" Value="#2563EB" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="BorderBrush" Value="#3B82F6" />
+        </Style>
+    </Window.Resources>
 
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,0,18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock FontSize="26" FontWeight="SemiBold" Text="MH 市场监控" />
+                <TextBlock Margin="0,4,0,0" Style="{StaticResource MutedText}" Text="只读研究工具 · 仅展示人工决策参考，不执行任何交易" />
+            </StackPanel>
+            <Border Grid.Column="1" Padding="14,8" CornerRadius="8">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Background" Value="#334155" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding State}" Value="{x:Static viewModels:MarketViewState.Loading}">
+                                <Setter Property="Background" Value="#164E63" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding State}" Value="{x:Static viewModels:MarketViewState.Ready}">
+                                <Setter Property="Background" Value="#14532D" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding State}" Value="{x:Static viewModels:MarketViewState.Offline}">
+                                <Setter Property="Background" Value="#78350F" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding State}" Value="{x:Static viewModels:MarketViewState.Error}">
+                                <Setter Property="Background" Value="#7F1D1D" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsStale}" Value="True">
+                                <Setter Property="Background" Value="#854D0E" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Style="{StaticResource MutedText}" Text="状态  " />
+                    <TextBlock FontWeight="SemiBold" Text="{Binding StatusText}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="1" Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.1*" />
+                    <ColumnDefinition Width="1.1*" />
+                    <ColumnDefinition Width="1.7*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Style="{StaticResource MutedText}" Text="区服" />
+                    <ComboBox IsEnabled="{Binding CanInitialize}"
+                              ItemsSource="{Binding Servers}"
+                              DisplayMemberPath="Name"
+                              SelectedValuePath="Id"
+                              SelectedValue="{Binding SelectedServerId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Style="{StaticResource MutedText}" Text="商品" />
+                    <ComboBox IsEnabled="{Binding CanInitialize}"
+                              ItemsSource="{Binding Items}"
+                              DisplayMemberPath="Name"
+                              SelectedValuePath="Id"
+                              SelectedValue="{Binding SelectedItemId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <TextBlock Style="{StaticResource MutedText}" Text="历史时点（UTC，可编辑 ISO-8601）" />
+                    <TextBox IsEnabled="{Binding CanInitialize}"
+                             Text="{Binding SelectedAsOfUtcText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock FontSize="11" Foreground="#FCA5A5" Text="{Binding AsOfInputError}" TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel Grid.Column="3" Orientation="Horizontal">
+                    <Button Click="InitializeButton_Click" IsEnabled="{Binding CanInitialize}" Content="重新加载目录" />
+                    <Button Margin="8,5,0,0" Click="RefreshButton_Click" IsEnabled="{Binding CanRefresh}" Content="刷新行情" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Foreground="#FCA5A5" Text="{Binding ErrorMessage}" TextWrapping="Wrap" />
+            <TextBlock Grid.Column="1" Style="{StaticResource MutedText}" Text="{Binding LastSuccessfulText}" />
+        </Grid>
+
+        <Grid Grid.Row="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.25*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="1*" />
+            </Grid.ColumnDefinitions>
+
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
+                    <StackPanel>
+                        <DockPanel Margin="0,0,0,10">
+                            <TextBlock FontSize="17" FontWeight="SemiBold" Text="价格走势" />
+                            <TextBlock DockPanel.Dock="Right" Style="{StaticResource MutedText}" Text="{Binding SelectedAsOfDisplayText}" />
+                        </DockPanel>
+                        <controls:PriceChart Height="270" Bars="{Binding Snapshot.Series.Bars}" />
+                        <TextBlock Margin="0,10,0,0" Style="{StaticResource MutedText}" Text="{Binding OcrAnomalyText}" />
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource CardBorder}">
+                    <StackPanel>
+                        <TextBlock Margin="0,0,0,10" FontSize="17" FontWeight="SemiBold" Text="行情指标" />
+                        <UniformGrid Columns="3">
+                            <Border Margin="0,0,8,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="7 日中位数" /><TextBlock FontSize="16" Text="{Binding Median7Text}" /></StackPanel>
+                            </Border>
+                            <Border Margin="0,0,8,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="30 日中位数" /><TextBlock FontSize="16" Text="{Binding Median30Text}" /></StackPanel>
+                            </Border>
+                            <Border Margin="0,0,0,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="数据年龄" /><TextBlock FontSize="16" Text="{Binding DataAgeText}" /></StackPanel>
+                            </Border>
+                            <Border Margin="0,0,8,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="7 日收益" /><TextBlock FontSize="16" Text="{Binding Return7Text}" /></StackPanel>
+                            </Border>
+                            <Border Margin="0,0,8,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="30 日收益" /><TextBlock FontSize="16" Text="{Binding Return30Text}" /></StackPanel>
+                            </Border>
+                            <Border Margin="0,0,0,8" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="7 日波动" /><TextBlock FontSize="16" Text="{Binding Volatility7Text}" /></StackPanel>
+                            </Border>
+                            <Border Margin="0,0,8,0" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="30 日波动" /><TextBlock FontSize="16" Text="{Binding Volatility30Text}" /></StackPanel>
+                            </Border>
+                            <Border Margin="0,0,8,0" Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="7 日可见供给" /><TextBlock FontSize="16" Text="{Binding Supply7Text}" /></StackPanel>
+                            </Border>
+                            <Border Padding="10" Background="#1E2A40" CornerRadius="6">
+                                <StackPanel><TextBlock Style="{StaticResource MutedText}" Text="30 日可见供给" /><TextBlock FontSize="16" Text="{Binding Supply30Text}" /></StackPanel>
+                            </Border>
+                        </UniformGrid>
+                    </StackPanel>
+                </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Column="2" Style="{StaticResource CardBorder}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <TextBlock FontSize="17" FontWeight="SemiBold" Text="建议与安全门禁" />
+                        <Border Margin="0,12,0,14" Padding="14" Background="#1E3A5F" CornerRadius="8">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource MutedText}" Text="客户端安全动作" />
+                                <TextBlock Margin="0,3,0,0" FontSize="25" FontWeight="SemiBold" Text="{Binding ActionText}" />
+                                <TextBlock Margin="0,5,0,0" Text="{Binding ActionabilityText}" />
+                            </StackPanel>
+                        </Border>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Margin="0,0,12,8" Style="{StaticResource MutedText}" Text="门禁状态" />
+                            <TextBlock Grid.Column="1" Margin="0,0,0,8" Text="{Binding GateStatusText}" />
+                            <TextBlock Grid.Row="1" Margin="0,0,12,8" Style="{StaticResource MutedText}" Text="规则版本" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Margin="0,0,0,8" Text="{Binding RuleVersion}" />
+                            <TextBlock Grid.Row="2" Margin="0,0,12,8" Style="{StaticResource MutedText}" Text="门禁版本" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Margin="0,0,0,8" Text="{Binding GateVersion}" />
+                            <TextBlock Grid.Row="3" Margin="0,0,12,8" Style="{StaticResource MutedText}" Text="方向分数" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,0,0,8" Text="{Binding DirectionScoreText}" />
+                            <TextBlock Grid.Row="4" Margin="0,0,12,8" Style="{StaticResource MutedText}" Text="置信度" />
+                            <TextBlock Grid.Row="4" Grid.Column="1" Margin="0,0,0,8" Text="{Binding ConfidenceText}" />
+                            <TextBlock Grid.Row="5" Margin="0,0,12,0" Style="{StaticResource MutedText}" Text="目标最大仓位" />
+                            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding MaxSuggestedPositionText}" />
+                        </Grid>
+                        <TextBlock Margin="0,16,0,4" FontWeight="SemiBold" Text="门禁摘要" />
+                        <TextBlock Style="{StaticResource MutedText}" Text="{Binding GateSummaryText}" TextWrapping="Wrap" />
+                        <TextBlock Margin="0,14,0,4" FontWeight="SemiBold" Text="理由" />
+                        <TextBlock Text="{Binding ReasonsText}" TextWrapping="Wrap" />
+                        <TextBlock Margin="0,14,0,4" FontWeight="SemiBold" Text="失效条件" />
+                        <TextBlock Text="{Binding InvalidationConditionsText}" TextWrapping="Wrap" />
+                        <Border Margin="0,16,0,0" Padding="10" Background="#422006" CornerRadius="6">
+                            <TextBlock Foreground="#FED7AA" Text="{Binding ResearchNoticeText}" TextWrapping="Wrap" />
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+        </Grid>
+
+        <TextBlock Grid.Row="4" Margin="0,14,0,0" Style="{StaticResource MutedText}" Text="行情数据仅供研究与人工复核；客户端不会执行买卖、点击或自动化操作。" />
     </Grid>
 </Window>

@@ -1,23 +1,34 @@
-﻿using System.Text;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+using MH.Client.ViewModels;
 
 namespace MH.Client;
 
-/// <summary>
-/// Interaction logic for MainWindow.xaml
-/// </summary>
 public partial class MainWindow : Window
 {
-    public MainWindow()
+    private readonly FirstScreenViewModel viewModel;
+    private bool initialized;
+
+    public MainWindow(FirstScreenViewModel viewModel)
     {
+        this.viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         InitializeComponent();
+        DataContext = viewModel;
     }
+
+    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (initialized)
+        {
+            return;
+        }
+
+        initialized = true;
+        await viewModel.InitializeAsync();
+    }
+
+    private async void RefreshButton_Click(object sender, RoutedEventArgs e)
+        => await viewModel.RefreshAsync();
+
+    private async void InitializeButton_Click(object sender, RoutedEventArgs e)
+        => await viewModel.InitializeAsync();
 }

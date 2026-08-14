@@ -6,7 +6,7 @@
 
 ## 1. 已完成节点
 
-阶段 1 的可运行 MVP，以及阶段 2 的分析指标、建议、回测、质量门禁、只读预览 API 和客户端数据层闭环已完成：
+阶段 1 的可运行 MVP，以及阶段 2 的分析指标、建议、回测、质量门禁、只读预览 API、客户端数据层和 WPF 第一屏闭环已完成：
 
 - `MH.slnx` 已包含 Core、Server、Client、Collector、Tests 五个项目。
 - SDK 锁定为 .NET 10.0.101，启用 nullable、确定性构建和警告即错误。
@@ -29,25 +29,30 @@
 - `MH.Client` 已实现接口化只读 API 客户端，消费目录、走势、指标和建议端点；区服/商品路径段编码，查询时点统一为 UTC。
 - 第一屏 ViewModel 已实现 `Idle/Loading/Ready/Offline/Error`、显式区服/商品/历史时点、最后成功时间、请求取消和请求代次；旧请求即使忽略取消并晚返回也不能覆盖新结果。
 - 网络失败会保留最后成功快照并标记陈旧；在线数据年龄超过 48 小时也标记陈旧。只有 `Ready`、非陈旧且服务端允许时才显示可执行，否则候选买卖降为观察。
+- WPF 启动会加载 DEMO 目录，自动选择首个区服/商品，并用该商品最后一根完整日线的 `EndUtc` 作为默认历史时点，不硬编码目录 ID 或模拟日期。
+- 第一屏已展示价格折线、OCR 异常点、7/30 日中位数/收益/波动/可见供给、数据年龄，以及建议动作、门禁、版本、理由、失效条件和研究提示。
+- 窗口提供“重新加载目录”和“刷新行情”两个入口；空目录、无行情、首次断网、非法历史时点和较小窗口滚动均有明确降级。
 - 新增 5 类确定性规则验证行情：上涨缩量、下跌放量、短中期冲突、高波动和数据不足；测试通过真实分析器与建议规则验证预期安全行为，并覆盖未来极端行情隔离。
 - 新增 `scripts/Validate-Demo.ps1` 和 `docs/VALIDATION.md`，可用独立 SQLite 一键验收真实 HTTP 数据闭环。
-- Client 的窗口仍是 WPF 空壳，但只读客户端和第一屏状态逻辑已就绪；Collector 仍是可编译空壳。
+- Client 第一屏已接通只读模拟行情；Collector 仍是可编译空壳。
 
 ## 2. 已验证结果
 
-2026-08-14 客户端数据层节点本地验收：
+2026-08-14 WPF 第一屏节点本地验收：
 
 ```text
 dotnet build MH.slnx -c Release --no-restore
 结果：5/5 项目成功，0 warning，0 error
 
 dotnet test MH.Tests\MH.Tests.csproj -c Release --no-build
-结果：81 passed，0 failed，0 skipped
+结果：91 passed，0 failed，0 skipped
 ```
 
-81 项测试覆盖：数据闭环、稳健指标、建议规则、5 类确定性虚拟行情、滚动回测、质量门禁、建议预览 API，以及客户端四端点、中文/空格 URI、UTC 归一化、非法选择、首次失败、离线保留、主动取消、请求竞态、48 小时陈旧边界和不可执行展示语义。
+91 项测试覆盖：数据闭环、稳健指标、建议规则、5 类确定性虚拟行情、滚动回测、质量门禁、建议预览 API，以及客户端四端点、目录初始化/重试、空目录、无日线、中文/空格 URI、UTC 归一化、非法输入、首次失败、离线保留、主动取消、请求竞态、48 小时陈旧边界、地址覆盖和不可执行展示语义。
 
 本节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。收敛后由主任务独立重跑 Release 构建和全量测试，结果如上。
+
+WPF 第一屏主审查又补充了初始化重试、输入禁用、左右滚动、状态颜色和服务地址根路径约束。无交互启动冒烟已确认 `MH.Client.exe` 可打开标题为“MH 市场监控”的窗口并持续运行；由于本机 Codex 窗口截图组件权限失败，DPI、字体和长文本的最终目视验收仍需人工完成。
 
 真实 HTTP 一键复验已通过：1 个 DEMO 区服、24 个商品、180 根日线、历史指标和建议预览均符合预期；本次固定时点输出 `CandidateBuy`、门禁 `ResearchOnly`、`isActionable=false`，证明研究状态不会被误标为可执行。
 
@@ -77,6 +82,7 @@ eb70e9b feat(backtest): add deterministic rolling simulation
 cdde94a feat(backtest): add multi-window quality gate
 ee4bef1 feat(api): add recommendation research preview
 7dbdee5 test(simulation): add deterministic validation scenarios
+bcba8bb feat(client): add safe market data view model
 ```
 
 ## 3. 尚未完成与已知欠账
@@ -84,9 +90,9 @@ ee4bef1 feat(api): add recommendation research preview
 - 当前使用 `EnsureCreated` 首次建库，尚未生成正式 EF Core Migration；升级数据库前必须补上。
 - 回测当前没有无歧义的完整平仓周期，因此未输出命中率；后续应先定义持仓批次和已实现盈亏口径。
 - 可见供给只作为代理指标，尚未进入回测成交容量约束。
-- 建议预览已接入只读 Server API 和客户端状态层，但尚无建议持久化或 WPF 可视化；当前仍是研究预览，不代表真实资金建议。
+- 建议预览已接入只读 Server API 和 WPF 第一屏，但尚无建议持久化；当前仍是研究预览，不代表真实资金建议。
 - 事件前/中/后比较与跨区标准化尚未实现。
-- Client 尚未把现有数据层接入窗口，Collector 仍只有工程壳；没有行情可视化、OCR、热键或采集状态机。
+- Client 第一屏仍需人工检查 DPI、字体和长文本布局；Collector 只有工程壳，尚无 OCR、热键或采集状态机。
 - 尚无真实截图、OCR 模型、商品别名字典和标注集，不能评估真实识别率。
 - 尚未实现自包含 Windows 发布和 CI。
 - 区服人数和高消费玩家只能做代理指数，尚无校准数据，不能输出具体人数。
@@ -99,17 +105,25 @@ cd MH
 dotnet build MH.slnx -c Release
 dotnet test MH.Tests\MH.Tests.csproj -c Release
 dotnet run --project MH.Server\MH.Server.csproj
+# 另开一个 PowerShell 窗口
+dotnet run --project MH.Client\MH.Client.csproj
 ```
 
-访问 API 前以服务启动日志显示的实际端口为准。
+客户端默认连接 `http://localhost:5002/`；若服务使用其他根地址，先设置 `MH_SERVER_BASE_URL`。第一屏人工验收清单：
+
+1. 启动后应自动出现区服、商品、历史时点、折线图、指标卡和建议门禁，不再是空白窗口。
+2. 切换商品并点击“刷新行情”，标题区、折线和建议内容应更新，界面不应冻结。
+3. 输入非法历史时点时，输入框下方应出现红色提示且“刷新行情”禁用；改回合法 ISO-8601 UTC 时间后恢复。
+4. 暂停服务后再次刷新，旧图表应保留，状态变为离线/陈旧，候选买卖必须降为不可执行；恢复服务后可再次刷新。
+5. 缩小窗口，左右两列内容都应可通过滚动访问；重点检查高 DPI、中文字体和长理由是否截断。
 
 推荐从阶段 2 的下一个最小闭环继续：
 
-1. 为 ViewModel 增加独立目录初始化入口，让窗口启动后先加载 DEMO 区服/商品，不依赖硬编码 ID；服务默认地址使用开发端口 `http://localhost:5002`，并允许环境变量覆盖。
-2. 把现有只读客户端和 ViewModel 接入 `MainWindow`，实现区服/商品选择、显式历史时点和刷新；保持业务逻辑不进入 code-behind。
-3. 第一屏只做总览、单商品轻量走势图和建议卡，必须展示门禁状态、规则/门禁版本、理由、数据年龄、离线/陈旧状态和“研究预览”提示。
-4. 增加目录加载失败、空目录、选择联动和 UI 所需派生状态测试；不先实现 OCR/悬浮窗，也不引入重型 UI 框架。
-5. 第一屏验收后再扩展活动日历、区服指标和个人仓位。
+1. 先完成人工视觉验收；发现布局或交互问题时只修第一屏，不顺带扩展功能。
+2. 验收通过后进入“活动事件研究”后端节点：查询区服事件，并对单商品计算事件前/中/后的价格和可见供给变化。
+3. 事件影响计算必须使用显式 `asOfUtc`，未发生的事件后窗口返回不可用，不能用未来数据补齐。
+4. 后端合同和确定性测试稳定后，再把活动日历与事件标记接入现有走势图。
+5. 活动节点验收后再做跨区标准化、区服活跃/高价值需求代理指数和个人仓位。
 
 交接时应保留以下指标口径：
 
@@ -123,11 +137,11 @@ dotnet run --project MH.Server\MH.Server.csproj
 ## 5. 可直接交给后续 Codex 任务的提示词
 
 ```text
-继续 MH 项目阶段 2 的下一小节：把已完成的只读 API 客户端和 FirstScreenViewModel 接入 WPF 第一屏。
+继续 MH 项目阶段 2 的下一小节：实现活动事件查询和单商品事件影响研究后端。
 先阅读 docs/PROJECT_PLAN.md、docs/DEVELOPMENT_PLAN.md、docs/STATUS.md。
-只改 MH.Client 和 MH.Tests；不得修改 Server/Collector/OCR，不新增第三方 MVVM 或重型图表依赖。
-先补目录初始化与空目录/失败测试，再将 MainWindow 绑定到 ViewModel；服务默认地址为 http://localhost:5002，并允许 MH_SERVER_BASE_URL 覆盖。第一屏实现区服/商品选择、显式历史时点、轻量走势图和建议卡，清晰展示 Loading/Offline/Error、门禁、版本、理由、数据年龄与研究提示。
-成功标准：不硬编码目录 ID，离线或陈旧时不显示可执行买卖；Release 全解法 0 warning/0 error，全部测试通过。完成后停止，不进入 OCR/悬浮窗。
+先确认 WPF 第一屏人工验收已通过；若尚未通过，只修第一屏并停止。
+验收通过后只改 MH.Core、MH.Server 和 MH.Tests，不改 Client/Collector/OCR。新增有界事件查询，以及纯 Core 的事件前/中/后影响计算；价格使用稳健日线，可见供给继续明确为采集代理，所有输出带样本量、窗口、asOfUtc 和不可用原因。
+成功标准：确定性测试覆盖完整事件、正在发生、未来事件、样本不足、OCR 异常和 asOfUtc 未来隔离；API 参数/404/UTC 等价测试通过；Release 0 warning/0 error，全量测试通过。完成后停止，下一节点再接 WPF 活动日历。
 ```
 
 ## 6. 安全提醒
