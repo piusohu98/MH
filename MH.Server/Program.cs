@@ -5,6 +5,7 @@ using MH.Core;
 using MH.Core.Contracts;
 using MH.Core.Models;
 using MH.Server.Data;
+using MH.Server.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 var databasePath = DatabaseOptions.ResolvePath(builder.Configuration);
@@ -16,6 +17,7 @@ if (!string.IsNullOrWhiteSpace(databaseDirectory))
 
 builder.Services.AddProblemDetails();
 builder.Services.AddDbContext<MarketDbContext>(options => options.UseSqlite($"Data Source={databasePath};Cache=Shared;"));
+builder.Services.AddScoped<RecommendationPreviewService>();
 builder.Services.AddHealthChecks().AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 
 var app = builder.Build();
@@ -250,6 +252,30 @@ app.MapGet("/api/v1/markets/{serverId}/{itemId}/indicators", async (
         indicators.VisibleSupplyChange7Days,
         indicators.VisibleSupplyChange30Days,
         indicators.DataAgeHours));
+});
+
+app.MapGet("/api/v1/markets/{serverId}/{itemId}/recommendation", async (
+    string serverId,
+    string itemId,
+    string? asOfUtc,
+    RecommendationPreviewService previewService,
+    CancellationToken cancellationToken) =>
+{
+    if (!TryParseRequiredUtc(asOfUtc, out var cutoffUtc))
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid recommendation parameters",
+            detail: "asOfUtc is required and must be an ISO-8601 timestamp with an offset.");
+    }
+
+    var preview = await previewService.BuildAsync(serverId, itemId, cutoffUtc, cancellationToken);
+    return preview is null
+        ? Results.Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Market entity not found",
+            detail: "serverId or itemId does not exist in a queryable catalog.")
+        : Results.Ok(preview);
 });
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false });
