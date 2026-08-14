@@ -526,6 +526,10 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public MarketSeriesResponse? Series { get; set; }
     public RecommendationPreviewResponse? Preview { get; set; }
     public decimal DataAgeHours { get; set; } = 12.5m;
+    public decimal? RobustMedian7Days { get; set; } = 100m;
+    public decimal? Return7Days { get; set; } = 0.05m;
+    public decimal? Volatility7Days { get; set; } = 0.02m;
+    public decimal? VisibleSupplyChange7Days { get; set; } = -0.1m;
     public bool BlockCatalog { get; set; }
     public bool BlockRecommendation { get; set; }
     public int CatalogCalls { get; private set; }
@@ -636,7 +640,8 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public static RecommendationPreviewResponse CreatePreview(
         RecommendationAction action = RecommendationAction.CandidateBuy,
         bool isActionable = false,
-        BacktestQualityStatus gateStatus = BacktestQualityStatus.ResearchOnly)
+        BacktestQualityStatus gateStatus = BacktestQualityStatus.ResearchOnly,
+        decimal confidence = 0.8m)
     {
         var window = new BacktestWindowSummary(AsOfUtc.AddDays(-40), AsOfUtc, 40m, 30, 4, 0.03m, 0.08m, 0.5m, RecommendationRule.RuleVersion);
         var gate = new BacktestQualityGateResult(
@@ -650,7 +655,7 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
             AsOfUtc,
             action,
             action == RecommendationAction.CandidateSell ? -65 : 65,
-            0.8m,
+            confidence,
             RecommendationRule.RuleVersion,
             [new RecommendationReason("trend-consistent", "趋势样例。")],
             ["数据转为陈旧时失效。"],
@@ -675,7 +680,27 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
         => new(serverId, itemId, AsOfUtc.AddDays(-30), AsOfUtc, [new PriceBarDto(AsOfUtc.AddDays(-1), AsOfUtc, 100, 110, 90, 105, 10, false)]);
 
     private MarketIndicatorsResponse CreateIndicators(string serverId, string itemId, DateTimeOffset asOfUtc)
-        => new(serverId, itemId, asOfUtc.ToUniversalTime(), 100m, 100m, 1m, 1m, 7, 30, 7, 30, 0.05m, 0.08m, 105m, 103m, 0.02m, 0.03m, -0.1m, -0.05m, DataAgeHours);
+        => new(
+            serverId,
+            itemId,
+            asOfUtc.ToUniversalTime(),
+            RobustMedian7Days,
+            100m,
+            1m,
+            1m,
+            7,
+            30,
+            7,
+            30,
+            Return7Days,
+            0.08m,
+            105m,
+            103m,
+            Volatility7Days,
+            0.03m,
+            VisibleSupplyChange7Days,
+            -0.05m,
+            DataAgeHours);
 
     private static TaskCompletionSource<T> NewCompletionSource<T>()
         => new(TaskCreationOptions.RunContinuationsAsynchronously);

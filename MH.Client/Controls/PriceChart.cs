@@ -19,6 +19,18 @@ public sealed class PriceChart : FrameworkElement
         set => SetValue(BarsProperty, value);
     }
 
+    public static readonly DependencyProperty CommonPrice7DaysProperty = DependencyProperty.Register(
+        nameof(CommonPrice7Days),
+        typeof(decimal?),
+        typeof(PriceChart),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public decimal? CommonPrice7Days
+    {
+        get => (decimal?)GetValue(CommonPrice7DaysProperty);
+        set => SetValue(CommonPrice7DaysProperty, value);
+    }
+
     protected override void OnRender(DrawingContext drawingContext)
     {
         base.OnRender(drawingContext);
@@ -34,12 +46,18 @@ public sealed class PriceChart : FrameworkElement
             return;
         }
 
-        var left = 18d;
+        var left = 72d;
         var right = Math.Max(left + 1, ActualWidth - 18d);
-        var top = 22d;
-        var bottom = Math.Max(top + 1, ActualHeight - 24d);
-        var minimum = bars.Min(bar => bar.Close);
-        var maximum = bars.Max(bar => bar.Close);
+        var top = 34d;
+        var bottom = Math.Max(top + 1, ActualHeight - 38d);
+        var minimum = bars.Min(bar => (double)bar.Close);
+        var maximum = bars.Max(bar => (double)bar.Close);
+        if (CommonPrice7Days is decimal commonPrice)
+        {
+            minimum = Math.Min(minimum, (double)commonPrice);
+            maximum = Math.Max(maximum, (double)commonPrice);
+        }
+
         var range = Math.Max(1d, maximum - minimum);
         var points = new Point[bars.Length];
         for (var index = 0; index < bars.Length; index++)
@@ -65,6 +83,36 @@ public sealed class PriceChart : FrameworkElement
         linePen.Freeze();
         drawingContext.DrawGeometry(null, linePen, geometry);
 
+        DrawText(
+            drawingContext,
+            maximum.ToString("N0", CultureInfo.InvariantCulture),
+            new Point(6, Math.Max(2, top - 17)),
+            Brushes.LightSteelBlue,
+            11);
+        DrawText(
+            drawingContext,
+            minimum.ToString("N0", CultureInfo.InvariantCulture),
+            new Point(6, Math.Max(top, bottom - 8)),
+            Brushes.LightSteelBlue,
+            11);
+
+        if (CommonPrice7Days is decimal median)
+        {
+            var medianY = bottom - ((double)median - minimum) / range * (bottom - top);
+            var medianPen = new Pen(new SolidColorBrush(Color.FromRgb(148, 163, 184)), 1)
+            {
+                DashStyle = new DashStyle([4, 4], 0)
+            };
+            medianPen.Freeze();
+            drawingContext.DrawLine(medianPen, new Point(left, medianY), new Point(right, medianY));
+            DrawText(
+                drawingContext,
+                $"近 7 天常见价 {median.ToString("N0", CultureInfo.InvariantCulture)}",
+                new Point(left + 6, Math.Max(top, medianY - 17)),
+                Brushes.LightSlateGray,
+                11);
+        }
+
         foreach (var (point, bar) in points.Zip(bars))
         {
             if (bar.HasOcrAnomaly)
@@ -73,13 +121,44 @@ public sealed class PriceChart : FrameworkElement
             }
         }
 
-        DrawLabel(
+        var latestPoint = points[^1];
+        drawingContext.DrawEllipse(Brushes.White, null, latestPoint, 4.5, 4.5);
+        DrawText(
             drawingContext,
-            $"收盘 {bars[^1].Close.ToString("N0", CultureInfo.InvariantCulture)} · {bars.Length} 根日线",
-            Brushes.LightSteelBlue);
+            $"最新 {bars[^1].Close.ToString("N0", CultureInfo.InvariantCulture)}",
+            new Point(Math.Min(latestPoint.X + 7, Math.Max(left, right - 74)), Math.Max(top, latestPoint.Y - 18)),
+            Brushes.White,
+            11);
+        DrawText(
+            drawingContext,
+            bars[0].EndUtc.ToUniversalTime().ToString("MM-dd", CultureInfo.InvariantCulture),
+            new Point(left, bottom + 8),
+            Brushes.LightSlateGray,
+            11);
+        var lastDateText = bars[^1].EndUtc.ToUniversalTime().ToString("MM-dd", CultureInfo.InvariantCulture);
+        DrawText(
+            drawingContext,
+            lastDateText,
+            new Point(Math.Max(left, right - 34), bottom + 8),
+            Brushes.LightSlateGray,
+            11);
+        DrawText(
+            drawingContext,
+            $"{bars.Length} 根日线",
+            new Point(Math.Max(left, right - 74), 8),
+            Brushes.LightSteelBlue,
+            11);
     }
 
     private void DrawLabel(DrawingContext drawingContext, string text, Brush brush)
+        => DrawText(drawingContext, text, new Point(18, 8), brush, 13);
+
+    private void DrawText(
+        DrawingContext drawingContext,
+        string text,
+        Point point,
+        Brush brush,
+        double fontSize)
     {
         if (ActualWidth <= 0 || ActualHeight <= 0)
         {
@@ -91,9 +170,9 @@ public sealed class PriceChart : FrameworkElement
             CultureInfo.CurrentUICulture,
             FlowDirection.LeftToRight,
             new Typeface("Segoe UI"),
-            13,
+            fontSize,
             brush,
             VisualTreeHelper.GetDpi(this).PixelsPerDip);
-        drawingContext.DrawText(formattedText, new Point(18, 8));
+        drawingContext.DrawText(formattedText, point);
     }
 }

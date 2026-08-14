@@ -297,7 +297,133 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         => SelectedAsOfUtc.HasValue ? FormatAsOf(SelectedAsOfUtc.Value) : "未选择";
 
     public string LastSuccessfulText
-        => LastSuccessfulAtUtc.HasValue ? FormatAsOf(LastSuccessfulAtUtc.Value) : "暂无成功刷新";
+        => LastSuccessfulAtUtc.HasValue
+            ? LastSuccessfulAtUtc.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)
+            : "暂无成功刷新";
+
+    public int? CurrentReferencePrice => GetLatestBar()?.Close;
+
+    public int? LatestLowPrice => GetLatestBar()?.Low;
+
+    public int? LatestHighPrice => GetLatestBar()?.High;
+
+    public DateTimeOffset? LatestCollectionEndUtc => GetLatestBar()?.EndUtc.ToUniversalTime();
+
+    public string CurrentReferencePriceText
+        => CurrentReferencePrice.HasValue
+            ? $"{CurrentReferencePrice.Value.ToString("N0", CultureInfo.InvariantCulture)} 金币"
+            : "数据不足";
+
+    public string LatestRangeText
+        => LatestLowPrice.HasValue && LatestHighPrice.HasValue
+            ? $"{LatestLowPrice.Value.ToString("N0", CultureInfo.InvariantCulture)} ~ {LatestHighPrice.Value.ToString("N0", CultureInfo.InvariantCulture)} 金币"
+            : "数据不足";
+
+    public string PriceCollectionCutoffText
+        => LatestCollectionEndUtc.HasValue ? FormatAsOf(LatestCollectionEndUtc.Value) : "数据不足";
+
+    public string CollectionCutoffText => PriceCollectionCutoffText;
+
+    public string RelativePriceText
+    {
+        get
+        {
+            var currentPrice = CurrentReferencePrice;
+            var median = Snapshot?.Indicators.RobustMedian7Days;
+            if (!currentPrice.HasValue || !median.HasValue || median.Value <= 0)
+            {
+                return "数据不足：暂无足够采集样本；不是官方实时最低价。";
+            }
+
+            var difference = currentPrice.Value / median.Value - 1m;
+            var conclusion = difference < -0.05m
+                ? "价格偏低"
+                : difference > 0.05m
+                    ? "价格偏高"
+                    : "接近近期常见价";
+            return $"{conclusion}（相对近 7 天常见价 {FormatPercent(difference)}，基于采集样本；不是官方实时最低价）";
+        }
+    }
+
+    public string PriceChange7Text
+    {
+        get
+        {
+            var change = Snapshot?.Indicators.Return7Days;
+            if (!change.HasValue)
+            {
+                return "数据不足";
+            }
+
+            var trend = change.Value >= 0.03m
+                ? "上涨"
+                : change.Value <= -0.03m
+                    ? "下跌"
+                    : "基本平稳";
+            return $"近 7 天价格变化：{FormatPercent(change)}（{trend}）";
+        }
+    }
+
+    public string PriceStability7Text
+    {
+        get
+        {
+            var volatility = Snapshot?.Indicators.Volatility7Days;
+            if (!volatility.HasValue)
+            {
+                return "数据不足";
+            }
+
+            var stability = volatility.Value <= 0.08m
+                ? "较稳定"
+                : volatility.Value <= 0.18m
+                    ? "有一定波动"
+                    : "波动较大";
+            return $"价格稳定性：{stability}（{FormatPercent(volatility)}）";
+        }
+    }
+
+    public string SupplyChange7Text
+    {
+        get
+        {
+            var change = Snapshot?.Indicators.VisibleSupplyChange7Days;
+            if (!change.HasValue)
+            {
+                return "数据不足";
+            }
+
+            var supply = change.Value >= 0.25m
+                ? "明显变多"
+                : change.Value >= 0.05m
+                    ? "小幅变多"
+                    : change.Value >= -0.05m
+                        ? "变化不大"
+                        : change.Value > -0.25m
+                            ? "小幅变少"
+                            : "明显变少";
+            return $"在售数量变化（采集代理）：{FormatPercent(change)}（{supply}）";
+        }
+    }
+
+    public string ReferenceLevelText
+    {
+        get
+        {
+            var confidence = Snapshot?.Recommendation.Decision.Confidence;
+            if (!confidence.HasValue)
+            {
+                return "参考程度：数据不足";
+            }
+
+            var level = confidence.Value >= 0.75m
+                ? "高"
+                : confidence.Value >= 0.5m
+                    ? "中"
+                    : "低";
+            return $"参考程度：{level}";
+        }
+    }
 
     public string Median7Text => FormatNumber(Snapshot?.Indicators.RobustMedian7Days);
 
@@ -323,13 +449,16 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         get
         {
             var count = Snapshot?.Series.Bars.Count(bar => bar.HasOcrAnomaly) ?? 0;
-            return count == 0 ? "OCR 异常标记：无" : $"OCR 异常标记：{count} 个（仅提示，不代表已修正）";
+            return count == 0 ? "可能识别异常：无" : $"可能识别异常：有 {count} 个采集点（仅提醒，不自动修正）";
         }
     }
 
     public string ActionText => GetActionText(DisplayedRecommendationAction);
 
-    public string ActionabilityText => IsActionable ? "可执行（研究门禁通过）" : "不可执行（仅观察/研究）";
+    public string ActionabilityText
+        => IsActionable
+            ? "数据和历史模拟达到试用标准，也只能少量尝试并由你人工判断。"
+            : "数据或历史表现还不足，建议继续观察，不要仅凭本工具囤货或出售。";
 
     public string GateStatusText => GetGateStatusText(GateStatus);
 
@@ -338,7 +467,10 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
 
     public string ConfidenceText => FormatPercent(Snapshot?.Recommendation.Decision.Confidence);
 
-    public string MaxSuggestedPositionText => FormatPercent(Snapshot?.Recommendation.Decision.MaxSuggestedPosition);
+    public string MaxSuggestedPositionText
+        => Snapshot?.Recommendation.Decision.MaxSuggestedPosition is decimal position
+            ? $"最多占用金币比例：{FormatPercent(position)}"
+            : "数据不足";
 
     public string ReasonsText
         => RecommendationReasons.Count == 0
@@ -357,9 +489,9 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
             var summary = Snapshot?.Recommendation.QualityGate.Summary;
             return summary is null
                 ? "暂无门禁摘要。"
-                : $"窗口 {summary.WindowCount} 个 · 盈利窗口 {FormatPercent(summary.ProfitableWindowRatio)} · "
-                  + $"中位收益 {FormatPercent(summary.MedianReturn)} · 最坏回撤 {FormatPercent(summary.WorstMaxDrawdown)} · "
-                  + $"平均换手 {summary.AverageTurnover.ToString("0.##", CultureInfo.InvariantCulture)}";
+                : $"窗口 {summary.WindowCount} 个 · 有利阶段 {FormatPercent(summary.ProfitableWindowRatio)} · "
+                  + $"典型模拟结果 {FormatPercent(summary.MedianReturn)} · 最差回落 {FormatPercent(summary.WorstMaxDrawdown)} · "
+                  + $"库存调整强度 {summary.AverageTurnover.ToString("0.##", CultureInfo.InvariantCulture)}";
         }
     }
 
@@ -664,6 +796,19 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanRefresh));
         OnPropertyChanged(nameof(StateText));
         OnPropertyChanged(nameof(StatusText));
+        OnPropertyChanged(nameof(CurrentReferencePrice));
+        OnPropertyChanged(nameof(LatestLowPrice));
+        OnPropertyChanged(nameof(LatestHighPrice));
+        OnPropertyChanged(nameof(LatestCollectionEndUtc));
+        OnPropertyChanged(nameof(CurrentReferencePriceText));
+        OnPropertyChanged(nameof(LatestRangeText));
+        OnPropertyChanged(nameof(PriceCollectionCutoffText));
+        OnPropertyChanged(nameof(CollectionCutoffText));
+        OnPropertyChanged(nameof(RelativePriceText));
+        OnPropertyChanged(nameof(PriceChange7Text));
+        OnPropertyChanged(nameof(PriceStability7Text));
+        OnPropertyChanged(nameof(SupplyChange7Text));
+        OnPropertyChanged(nameof(ReferenceLevelText));
         OnPropertyChanged(nameof(Median7Text));
         OnPropertyChanged(nameof(Median30Text));
         OnPropertyChanged(nameof(Return7Text));
@@ -688,6 +833,11 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanRefresh));
     }
 
+    private PriceBarDto? GetLatestBar()
+        => Snapshot?.Series.Bars
+            .OrderByDescending(bar => bar.EndUtc)
+            .FirstOrDefault();
+
     private static string FormatAsOf(DateTimeOffset value)
         => value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
@@ -700,13 +850,13 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
     private static string GetActionText(RecommendationAction? action)
         => action switch
         {
-            RecommendationAction.DataInsufficient => "数据不足",
-            RecommendationAction.Observe => "观察",
-            RecommendationAction.CandidateBuy => "候选买入",
-            RecommendationAction.Hold => "持有",
-            RecommendationAction.CandidateSell => "候选卖出",
-            RecommendationAction.Avoid => "回避",
-            _ => "暂无建议"
+            RecommendationAction.DataInsufficient => "数据还不够，暂时别囤",
+            RecommendationAction.Observe => "先观察，暂不囤货",
+            RecommendationAction.CandidateBuy => "可以考虑少量囤货",
+            RecommendationAction.Hold => "已有库存可继续观察",
+            RecommendationAction.CandidateSell => "可以考虑分批出售",
+            RecommendationAction.Avoid => "风险较高，不建议囤货",
+            _ => "等待行情"
         };
 
     private static string GetGateStatusText(BacktestQualityStatus? status)
