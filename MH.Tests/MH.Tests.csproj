@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
@@ -16,6 +16,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MH.Core\MH.Core.csproj" />
     <ProjectReference Include="..\MH.Server\MH.Server.csproj" />
+    <ProjectReference Include="..\MH.Client\MH.Client.csproj" />
   </ItemGroup>
 
   <ItemGroup>
