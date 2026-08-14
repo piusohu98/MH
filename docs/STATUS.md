@@ -26,6 +26,8 @@
 - 门禁输出 `ResearchOnly`、`Disabled` 或 `TrialEligible`；试用回撤线为 20%，灾难回撤线为 35%，单窗 -25% 或整体平均收益非正直接禁用，试用状态仍只允许小额人工监督。
 - 建议预览 API 以必填 `asOfUtc` 为历史截点，只查询此前 151 天有界数据，返回当前建议、`isActionable`、三窗口回测门禁和固定研究假设，不持久化结果。
 - API 固定使用 100000 初始资金、1% 交易成本和 0.5% 滑点；只有门禁通过且动作是候选买入/卖出时才可执行，研究/禁用状态强制不可执行。
+- 新增 5 类确定性规则验证行情：上涨缩量、下跌放量、短中期冲突、高波动和数据不足；测试通过真实分析器与建议规则验证预期安全行为，并覆盖未来极端行情隔离。
+- 新增 `scripts/Validate-Demo.ps1` 和 `docs/VALIDATION.md`，可用独立 SQLite 一键验收真实 HTTP 数据闭环。
 - Client 与 Collector 当前是可编译的 WPF 空壳。
 
 ## 2. 已验证结果
@@ -37,10 +39,12 @@ dotnet build MH.slnx -c Release --no-restore
 结果：5/5 项目成功，0 warning，0 error
 
 dotnet test MH.Tests\MH.Tests.csproj -c Release --no-build
-结果：67 passed，0 failed，0 skipped
+结果：70 passed，0 failed，0 skipped
 ```
 
-67 项测试覆盖：数据闭环、稳健指标、建议规则、滚动回测、质量门禁，以及建议预览 API 的必填/非法参数、404、数据不足、UTC 等价、未来快照隔离、历史下界隔离和相同输入确定性。
+70 项测试覆盖：数据闭环、稳健指标、建议规则、5 类确定性虚拟行情、滚动回测、质量门禁，以及建议预览 API 的必填/非法参数、404、数据不足、UTC 等价、未来快照隔离、历史下界隔离和相同输入确定性。
+
+真实 HTTP 一键复验已通过：1 个 DEMO 区服、24 个商品、180 根日线、历史指标和建议预览均符合预期；本次固定时点输出 `CandidateBuy`、门禁 `ResearchOnly`、`isActionable=false`，证明研究状态不会被误标为可执行。
 
 独立真实 HTTP 复验已确认：
 
