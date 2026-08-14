@@ -6,7 +6,7 @@
 
 ## 1. 已完成节点
 
-阶段 1 的可运行 MVP，以及阶段 2 的分析指标和纯 Core 建议规则闭环已完成：
+阶段 1 的可运行 MVP，以及阶段 2 的分析指标、纯 Core 建议规则和确定性滚动回测闭环已完成：
 
 - `MH.slnx` 已包含 Core、Server、Client、Collector、Tests 五个项目。
 - SDK 锁定为 .NET 10.0.101，启用 nullable、确定性构建和警告即错误。
@@ -20,21 +20,23 @@
 - 指标查询保留 30 天窗口；仅在窗口内没有完整日线时，以同市场窗口前最新一条历史观察作为数据年龄锚点，查询为倒序单行，不加载全部历史。
 - `recommendation-rules-v1` 已输出动作、方向分数、置信度、规则版本、结构化理由、失效条件和交易后目标最大仓位；显式拒绝未来指标与陈旧/不足数据。
 - 单商品目标最大仓位绝对上限为 25%；候选买入随看多证据增强而上升，候选卖出随看空证据增强而下降，高波动、冲突趋势和数据不足安全降级。
+- 滚动回测只使用决策时点以前的完成日线，信号在下一根日线开盘执行；显式记录成本、滑点、权益、收益、最大回撤、换手和逐次决策/成交。
+- 回测目标数量以执行开盘权益计算并纳入成本/滑点，已有持仓隔夜跳空后再平衡也不会因目标计算突破 25% 仓位上限；只做多且卖出信号不会开空仓。
 - Client 与 Collector 当前是可编译的 WPF 空壳。
 
 ## 2. 已验证结果
 
-2026-08-14 建议规则节点本地验收：
+2026-08-14 滚动回测节点本地验收：
 
 ```text
 dotnet build MH.slnx -c Release --no-restore
 结果：5/5 项目成功，0 warning，0 error
 
 dotnet test MH.Tests\MH.Tests.csproj -c Release --no-build
-结果：38 passed，0 failed，0 skipped
+结果：47 passed，0 failed，0 skipped
 ```
 
-38 项测试覆盖：模拟数据与建库、SQLite 连接 pragma、目录/走势/上传 API、UTC 归一化、MAD 与零离差、样本不足、异常值、7/30 日窗口、收益率、EWMA、样本波动率、可见供给变化、数据年龄、未来数据隔离、指标 API，以及建议规则的数据门槛、趋势冲突、高波动、供给变化、确定性和仓位单调性/上限。
+47 项测试覆盖：模拟数据与建库、SQLite 连接 pragma、目录/走势/上传 API、UTC 归一化、稳健指标和未来数据隔离、建议规则边界，以及回测确定性、下一日执行、成本/滑点、精确收益/回撤/换手、区间末尾计价、未来记录前缀隔离和隔夜跳空仓位上限。
 
 独立真实 HTTP 复验已确认：
 
@@ -57,12 +59,15 @@ d07e9e0 feat(server): expose robust market indicators
 7bd39f2 feat(analytics): add trend and volatility metrics
 fdf6d96 feat(analytics): add supply freshness indicators
 636d544 fix(api): anchor data age outside indicator window
+7200121 feat(analytics): add explainable recommendation rules
 ```
 
 ## 3. 尚未完成与已知欠账
 
 - 当前使用 `EnsureCreated` 首次建库，尚未生成正式 EF Core Migration；升级数据库前必须补上。
-- 确定性滚动回测、交易成本/流动性约束、回测稳定度和基于回测的建议启用门槛尚未实现。
+- 基于回测的最低样本、覆盖期、最大回撤和稳定度门禁尚未实现，建议仍只能标记为研究状态。
+- 回测当前没有无歧义的完整平仓周期，因此未输出命中率；后续应先定义持仓批次和已实现盈亏口径。
+- 可见供给只作为代理指标，尚未进入回测成交容量约束。
 - 建议规则尚未接入 Server API、数据库或 WPF；当前仅是可测试的纯 Core v1 基线。
 - 事件前/中/后比较与跨区标准化尚未实现。
 - WPF 两个程序只有工程壳，没有行情 UI、OCR、热键或采集状态机。
@@ -84,11 +89,11 @@ dotnet run --project MH.Server\MH.Server.csproj
 
 推荐从阶段 2 的下一个最小闭环继续：
 
-1. 为 `recommendation-rules-v1` 增加纯 Core 时间滚动回测合同与固定数据测试，不先接 API/WPF。
-2. 每个决策点只使用当时以前的日线，显式记录交易成本、滑点和可见供给约束。
-3. 输出样本数、命中率、收益、最大回撤、换手和按动作拆分结果；相同输入必须确定性一致。
-4. 定义最低样本量、覆盖期、最大回撤和稳定度门槛；未通过时建议只能标记为研究状态。
-5. 回测门禁通过后再增加建议 API，然后实现 WPF 总览和单商品走势图。
+1. 定义纯 Core 回测质量门禁合同，输入现有 `RollingBacktestResult`，输出研究/禁用/可试用状态、规则版本和结构化理由。
+2. 门禁至少检查决策数、交易数、覆盖期、总收益、最大回撤和换手；阈值固定版本化。
+3. 用多个连续时间窗口验证稳定度，不能只用单次总收益启用建议；样本不足必须保持研究状态。
+4. 门禁通过后再增加建议 API，API 必须同时返回规则状态和回测摘要。
+5. 建议 API 通过后实现 WPF 总览和单商品走势图。
 
 交接时应保留以下指标口径：
 
@@ -102,11 +107,11 @@ dotnet run --project MH.Server\MH.Server.csproj
 ## 5. 可直接交给后续 Codex 任务的提示词
 
 ```text
-继续 MH 项目阶段 2 的下一小节：只实现 recommendation-rules-v1 的纯 Core 确定性滚动回测合同与测试。
+继续 MH 项目阶段 2 的下一小节：只实现纯 Core 回测质量门禁合同与确定性测试。
 先阅读 docs/PROJECT_PLAN.md、docs/DEVELOPMENT_PLAN.md、docs/STATUS.md。
-复用现有 RobustMarketAnalyzer 与 RecommendationRule，不得修改 Collector/OCR/WPF，不得引入机器学习框架，不先增加数据库持久化或 API。
-先定义回测输入、交易成本/滑点、仓位约束和结果合同；每个决策点必须只读取该时点以前的数据。
-成功标准：固定数据覆盖无未来数据、相同输入确定性、成本影响、最大回撤、换手、样本不足和规则版本；Release 全解法 0 warning/0 error，全部测试通过。
+复用现有 RollingBacktestResult，不得修改 Collector/OCR/WPF，不得引入机器学习框架，不先增加数据库持久化或 API。
+先定义研究/禁用/可试用状态、固定门禁版本、结构化理由和所用回测规则版本；检查最低决策/交易数、覆盖期、最大回撤、收益和换手，并为多窗口稳定度预留最小明确合同。
+成功标准：固定输入覆盖样本不足、亏损、高回撤、过高换手、规则版本不匹配、多个窗口结果冲突和全部通过；相同输入确定性；Release 全解法 0 warning/0 error，全部测试通过。
 ```
 
 ## 6. 安全提醒
