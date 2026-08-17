@@ -17,6 +17,7 @@
     <ProjectReference Include="..\MH.Core\MH.Core.csproj" />
     <ProjectReference Include="..\MH.Server\MH.Server.csproj" />
     <ProjectReference Include="..\MH.Client\MH.Client.csproj" />
+    <ProjectReference Include="..\MH.Collector\MH.Collector.csproj" />
   </ItemGroup>
 
   <ItemGroup>
