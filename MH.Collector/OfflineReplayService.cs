@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using MH.Collector.Ocr;
 using MH.Core.OfflineReplay;
+using MH.Core.Models;
 
 namespace MH.Collector;
 
@@ -79,6 +80,18 @@ public sealed class OfflineReplayService
             return OfflineReplayScanResult.Failed($"manifest 校验失败：{reason}");
         }
 
+        var catalog = document?.Catalog is null
+            ? null
+            : document.Catalog
+                .Select(item => new Item
+                {
+                    Id = item.Id ?? string.Empty,
+                    Name = item.Name ?? string.Empty,
+                    Category = string.Empty,
+                    Unit = string.Empty
+                })
+                .ToArray();
+
         var orderedFrames = frames
             .OrderBy(frame => frame.CapturedAtUtc)
             .ThenBy(frame => frame.RelativeImagePath, StringComparer.OrdinalIgnoreCase)
@@ -88,7 +101,7 @@ public sealed class OfflineReplayService
         foreach (var frame in orderedFrames)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            results.Add(await ReplayFrameAsync(fullDirectoryPath, manifest.ReplayId, frame, cancellationToken)
+            results.Add(await ReplayFrameAsync(fullDirectoryPath, manifest.ReplayId, frame, catalog, cancellationToken)
                 .ConfigureAwait(false));
         }
 
@@ -99,6 +112,7 @@ public sealed class OfflineReplayService
         string directoryPath,
         string replayId,
         OfflineReplayDocumentFrame frame,
+        IReadOnlyList<Item>? catalog,
         CancellationToken cancellationToken)
     {
         if (!OfflineReplayValidator.IsSafeRelativeImagePath(frame.RelativeImagePath ?? string.Empty))
@@ -181,13 +195,24 @@ public sealed class OfflineReplayService
                 recognition.Error ?? "OCR 识别失败。");
         }
 
-        var candidates = (recognition.Candidates ?? [])
-            .Select(candidate => new MH.Core.OfflineReplay.OfflineReplayCandidate(
-                candidate.ItemId,
-                candidate.DisplayName,
-                candidate.Confidence,
-                candidate.IsConfirmed))
-            .ToArray();
+        IReadOnlyList<MH.Core.OfflineReplay.OfflineReplayCandidate> candidates;
+        IReadOnlyList<OfflineReplayIssue> matcherIssues = [];
+        if (catalog is null)
+        {
+            candidates = (recognition.Candidates ?? [])
+                .Select(candidate => new MH.Core.OfflineReplay.OfflineReplayCandidate(
+                    candidate.ItemId,
+                    candidate.DisplayName,
+                    candidate.Confidence,
+                    candidate.IsConfirmed))
+                .ToArray();
+        }
+        else
+        {
+            var match = CatalogCandidateMatcher.Match(recognition.RawText, catalog);
+            candidates = match.Candidates;
+            matcherIssues = match.Issues;
+        }
         var classified = OfflineReplayValidator.Classify(
             replayId,
             new MH.Core.OfflineReplay.OfflineReplayFrame(
@@ -196,6 +221,14 @@ public sealed class OfflineReplayService
                 frame.CapturedAtUtc!.Value),
             candidates,
             recognition.RawText);
+
+        if (matcherIssues.Count > 0)
+        {
+            classified = classified with
+            {
+                Issues = matcherIssues.Concat(classified.Issues).ToArray()
+            };
+        }
 
         return OfflineReplayFrameResult.From(frame, classified);
     }
@@ -273,6 +306,18 @@ internal sealed class OfflineReplayDocument
 
     [JsonPropertyName("frames")]
     public List<OfflineReplayDocumentFrame>? Frames { get; init; }
+
+    [JsonPropertyName("catalog")]
+    public List<OfflineReplayDocumentCatalogItem>? Catalog { get; init; }
+}
+
+internal sealed class OfflineReplayDocumentCatalogItem
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
 }
 
 internal sealed class OfflineReplayDocumentFrame
