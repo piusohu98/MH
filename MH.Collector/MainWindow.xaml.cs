@@ -7,6 +7,7 @@ public partial class MainWindow : Window
 {
     private readonly OfflineReplayService replayService = new();
     private string? selectedDirectory;
+    private CancellationTokenSource? replayCancellation;
 
     public MainWindow()
     {
@@ -34,6 +35,13 @@ public partial class MainWindow : Window
     private async void ReplayButton_Click(object sender, RoutedEventArgs e)
         => await ReplaySelectedDirectoryAsync();
 
+    private void CancelReplayButton_Click(object sender, RoutedEventArgs e)
+    {
+        CancelReplayButton.IsEnabled = false;
+        StatusText.Text = "正在取消回放...";
+        replayCancellation?.Cancel();
+    }
+
     private async Task ReplaySelectedDirectoryAsync()
     {
         if (string.IsNullOrWhiteSpace(selectedDirectory))
@@ -41,17 +49,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        replayCancellation?.Dispose();
+        replayCancellation = new CancellationTokenSource();
+        var activeCancellation = replayCancellation;
+        SelectDirectoryButton.IsEnabled = false;
         ReplayButton.IsEnabled = false;
+        CancelReplayButton.IsEnabled = true;
         StatusText.Text = "正在读取本地回放目录...";
         try
         {
-            var result = await replayService.ReplayAsync(selectedDirectory);
+            var progress = new Progress<OfflineReplayProgress>(UpdateReplayProgress);
+            var result = await replayService.ReplayAsync(
+                selectedDirectory,
+                activeCancellation.Token,
+                progress);
             FramesList.ItemsSource = result.Frames;
             SucceededCountText.Text = result.SucceededCount.ToString();
             ReviewRequiredCountText.Text = result.ReviewRequiredCount.ToString();
             RejectedCountText.Text = result.RejectedCount.ToString();
             StatusText.Text = result.Error is null
-                ? $"已完成 {result.Frames.Count} 帧回放。当前使用确定性离线回放，不上传、不调用服务、不自动点击。"
+                ? result.ReviewRequiredCount > 0
+                    ? $"已完成 {result.Frames.Count} 帧回放，其中 {result.ReviewRequiredCount} 帧需要人工复核。"
+                    : $"已完成 {result.Frames.Count} 帧回放，无需人工复核。"
                 : result.Error;
         }
         catch (OperationCanceledException)
@@ -68,7 +87,25 @@ public partial class MainWindow : Window
         }
         finally
         {
-            ReplayButton.IsEnabled = true;
+            if (ReferenceEquals(replayCancellation, activeCancellation))
+            {
+                replayCancellation.Dispose();
+                replayCancellation = null;
+                SelectDirectoryButton.IsEnabled = true;
+                ReplayButton.IsEnabled = !string.IsNullOrWhiteSpace(selectedDirectory);
+                CancelReplayButton.IsEnabled = false;
+            }
         }
+    }
+
+    private void UpdateReplayProgress(OfflineReplayProgress progress)
+    {
+        StatusText.Text = progress.State switch
+        {
+            OfflineReplayProgressState.Reading => "正在读取本地回放目录...",
+            OfflineReplayProgressState.Recognizing =>
+                $"正在处理第 {progress.ProcessedCount + 1}/{progress.TotalCount} 帧：{progress.CurrentFrameId}",
+            _ => StatusText.Text
+        };
     }
 }

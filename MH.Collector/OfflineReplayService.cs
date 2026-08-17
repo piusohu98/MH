@@ -37,20 +37,22 @@ public sealed class OfflineReplayService
 
     public async Task<OfflineReplayScanResult> ReplayAsync(
         string directoryPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<OfflineReplayProgress>? progress = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
+        progress?.Report(new(OfflineReplayProgressState.Reading, 0, 0, null));
 
         var fullDirectoryPath = Path.GetFullPath(directoryPath);
         if (!Directory.Exists(fullDirectoryPath))
         {
-            return OfflineReplayScanResult.Failed("目录不存在。");
+            return Failed("目录不存在。", progress);
         }
 
         var manifestPath = Path.Combine(fullDirectoryPath, "manifest.json");
         if (!File.Exists(manifestPath))
         {
-            return OfflineReplayScanResult.Failed("未找到 manifest.json。");
+            return Failed("未找到 manifest.json。", progress);
         }
 
         byte[] manifestBytes;
@@ -63,15 +65,15 @@ public sealed class OfflineReplayService
         }
         catch (JsonException exception)
         {
-            return OfflineReplayScanResult.Failed($"manifest.json 格式错误：{exception.Message}");
+            return Failed($"manifest.json 格式错误：{exception.Message}", progress);
         }
         catch (IOException exception)
         {
-            return OfflineReplayScanResult.Failed($"无法读取 manifest.json：{exception.Message}");
+            return Failed($"无法读取 manifest.json：{exception.Message}", progress);
         }
         catch (UnauthorizedAccessException exception)
         {
-            return OfflineReplayScanResult.Failed($"无权读取 manifest.json：{exception.Message}");
+            return Failed($"无权读取 manifest.json：{exception.Message}", progress);
         }
 
         var frames = document?.Frames ?? [];
@@ -87,7 +89,7 @@ public sealed class OfflineReplayService
         if (!manifestValidation.IsValid)
         {
             var reason = string.Join("；", manifestValidation.Issues.Select(issue => issue.Detail));
-            return OfflineReplayScanResult.Failed($"manifest 校验失败：{reason}");
+            return Failed($"manifest 校验失败：{reason}", progress);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -123,6 +125,11 @@ public sealed class OfflineReplayService
         {
             cancellationToken.ThrowIfCancellationRequested();
             var frame = orderedFrames[index];
+            progress?.Report(new(
+                OfflineReplayProgressState.Recognizing,
+                results.Count,
+                orderedFrames.Length,
+                frame.FrameId));
             var result = await ReplayFrameAsync(fullDirectoryPath, manifest.ReplayId, frame, catalog, cancellationToken)
                 .ConfigureAwait(false);
             results.Add(result);
@@ -133,7 +140,23 @@ public sealed class OfflineReplayService
         cancellationToken.ThrowIfCancellationRequested();
         File.Delete(checkpointPath);
 
-        return new OfflineReplayScanResult(new ReadOnlyCollection<OfflineReplayFrameResult>(results), null);
+        var scanResult = new OfflineReplayScanResult(new ReadOnlyCollection<OfflineReplayFrameResult>(results), null);
+        progress?.Report(new(
+            scanResult.ReviewRequiredCount > 0
+                ? OfflineReplayProgressState.ReviewRequired
+                : OfflineReplayProgressState.Completed,
+            results.Count,
+            orderedFrames.Length,
+            null));
+        return scanResult;
+    }
+
+    private static OfflineReplayScanResult Failed(
+        string error,
+        IProgress<OfflineReplayProgress>? progress)
+    {
+        progress?.Report(new(OfflineReplayProgressState.Failed, 0, 0, null));
+        return OfflineReplayScanResult.Failed(error);
     }
 
     private static string GetCheckpointPath(string verifiedDirectoryPath)
@@ -409,6 +432,21 @@ public sealed class OfflineReplayService
         public IReadOnlyList<OfflineReplayFrameResult>? CompletedFrames { get; init; }
     }
 }
+
+public enum OfflineReplayProgressState
+{
+    Reading = 0,
+    Recognizing = 1,
+    ReviewRequired = 2,
+    Completed = 3,
+    Failed = 4
+}
+
+public sealed record OfflineReplayProgress(
+    OfflineReplayProgressState State,
+    int ProcessedCount,
+    int TotalCount,
+    string? CurrentFrameId);
 
 public sealed record OfflineReplayScanResult(
     IReadOnlyList<OfflineReplayFrameResult> Frames,
