@@ -48,6 +48,7 @@
 - 阶段 3.1 已建立 `IOcrRecognizer` 本地注入边界和确定性 Fake recognizer：Fake 只复用 manifest 中已有文本/候选，不打开图片、不联网、不触发 UI 输入；recognizer 失败只拒绝当前帧，取消按原始 token 透传。
 - 阶段 3.1 已接入 `CatalogCandidateMatcher` 和可选 manifest `catalog`：唯一精确名称匹配可接受，包含匹配、多候选、低置信度、无匹配和非法/空目录均显式复核或拒绝；未提供目录的旧 manifest 仍按原候选提示回放。
 - 阶段 4 离线闭环首片已增加 `.offline-replay-checkpoint.json`：每帧完成后原子写入，checkpoint 绑定 manifest SHA-256 和连续确定性帧前缀；取消后只恢复剩余帧，manifest 变化或 sidecar 损坏时从头回放，完整成功后清理。
+- Collector 已增加 `Reading/Recognizing/ReviewRequired/Completed/Failed` 进度事件和窗口取消入口；回放期间禁用目录切换/重复启动，状态栏显示当前帧，结束时明确需要人工复核的数量且不自动确认。
 
 ## 2. 已验证结果
 
@@ -143,6 +144,18 @@ dotnet build MH.slnx -c Release --no-restore
 ```
 
 提交 `0bfde6b` 覆盖第二帧取消后仅恢复未完成帧、manifest 变化后全部重放、损坏 checkpoint 忽略和成功清理。checkpoint 只写入用户已选择且校验通过的回放目录，不上传、不调用服务、不执行 UI 输入。
+
+2026-08-17 Collector 可取消进度与复核提醒复验：
+
+```text
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore
+结果：269 passed，0 failed，0 skipped
+
+dotnet build MH.slnx -c Release --no-restore
+结果：5/5 项目成功，0 warning，0 error
+```
+
+提交 `1f862e2` 新增读取/逐帧识别/需复核/完成/失败事件顺序测试，以及 Collector 的取消按钮和人工复核数量提示。取消继续通过原 token 透传，并复用 checkpoint 恢复能力。
 
 客户端节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。
 
