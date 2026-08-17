@@ -47,6 +47,7 @@
 - 阶段 3.0 离线回放契约已固定为 `offline-replay-v1`：manifest/frame 元数据、图片路径安全校验、确定性排序、商品候选置信度和人工确认状态均有纯 Core 校验；低置信度、多候选或未确认结果不得静默接受。
 - 阶段 3.1 已建立 `IOcrRecognizer` 本地注入边界和确定性 Fake recognizer：Fake 只复用 manifest 中已有文本/候选，不打开图片、不联网、不触发 UI 输入；recognizer 失败只拒绝当前帧，取消按原始 token 透传。
 - 阶段 3.1 已接入 `CatalogCandidateMatcher` 和可选 manifest `catalog`：唯一精确名称匹配可接受，包含匹配、多候选、低置信度、无匹配和非法/空目录均显式复核或拒绝；未提供目录的旧 manifest 仍按原候选提示回放。
+- 阶段 4 离线闭环首片已增加 `.offline-replay-checkpoint.json`：每帧完成后原子写入，checkpoint 绑定 manifest SHA-256 和连续确定性帧前缀；取消后只恢复剩余帧，manifest 变化或 sidecar 损坏时从头回放，完整成功后清理。
 
 ## 2. 已验证结果
 
@@ -130,6 +131,18 @@ dotnet build MH.slnx -c Release --no-restore
 ```
 
 本节点提交链为 `752210c`（OCR 契约与 Fake）、`181ffb6`（OCR 边界测试）、`b29cf22`（确定性商品候选匹配）、`0900fef`（Collector 本地目录接线）。定向测试覆盖 recognizer 请求字段、单帧失败隔离、取消透传、精确/包含/歧义/无匹配目录结果和旧 manifest 兼容。当前仍没有真实截图、中文模型、字典或标注集，不宣称真实识别率或 P95。
+
+2026-08-17 阶段 4 checkpoint 首片复验：
+
+```text
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore
+结果：267 passed，0 failed，0 skipped
+
+dotnet build MH.slnx -c Release --no-restore
+结果：5/5 项目成功，0 warning，0 error
+```
+
+提交 `0bfde6b` 覆盖第二帧取消后仅恢复未完成帧、manifest 变化后全部重放、损坏 checkpoint 忽略和成功清理。checkpoint 只写入用户已选择且校验通过的回放目录，不上传、不调用服务、不执行 UI 输入。
 
 客户端节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。
 
@@ -224,7 +237,7 @@ dotnet run --project MH.Client\MH.Client.csproj
 ```text
 继续 MH 项目阶段 3.1：阶段 2 行情面板、活动研究、跨区标准化、区服代理指标和阶段 3.0 离线截图回放已经完成；当前已完成本地 OCR 注入边界、确定性 Fake、商品候选匹配和可选 manifest 目录接线。
 先阅读 docs/PROJECT_PLAN.md、docs/DEVELOPMENT_PLAN.md、docs/STATUS.md、docs/OFFLINE_REPLAY.md。
-下一步仅在 RapidOcrNet 中文模型、字典和标注夹具被明确核验后实现真实适配器；否则继续离线状态机、断点恢复和人工复核通知。截图不得上传；没有真实截图和标注集时不能宣称真实识别率或 P95。
+下一步仅在 RapidOcrNet 中文模型、字典和标注夹具被明确核验后实现真实适配器；否则继续离线状态机和人工复核通知。checkpoint 恢复已完成首片。截图不得上传；没有真实截图和标注集时不能宣称真实识别率或 P95。
 ```
 
 ## 6. 安全提醒

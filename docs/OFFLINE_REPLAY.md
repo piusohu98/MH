@@ -65,3 +65,5 @@ dotnet run --project MH.Collector\MH.Collector.csproj
 ```
 
 启动后选择包含 `manifest.json` 的目录。列表会按捕获时间、图片路径和帧 ID 确定性排序，并显示成功、需人工复核和拒绝数量。
+
+回放每完成一帧，会在同一目录原子更新 `.offline-replay-checkpoint.json`。checkpoint 固定绑定当前 `manifest.json` 的 SHA-256，并只接受与确定性排序结果一致的连续已完成帧；取消或进程中断后重新选择同一目录时只处理剩余帧。manifest 内容变化、checkpoint 损坏、版本不匹配或帧元数据不一致时会忽略旧 checkpoint 并从头回放。完整成功后 sidecar 会被删除。
