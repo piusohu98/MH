@@ -44,4 +44,14 @@ public interface IReadOnlyMarketApiClient
         DateTimeOffset asOfUtc,
         int windowDays = EventImpactAnalyzer.DefaultWindowDays,
         CancellationToken cancellationToken = default);
+
+    Task<EventPatternSummaryResponse> GetEventPatternSummaryAsync(
+        string serverId,
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int windowDays = EventPatternSummaryAnalyzer.DefaultWindowDays,
+        int historyDays = EventPatternSummaryAnalyzer.DefaultHistoryDays,
+        int maxEvents = EventPatternSummaryAnalyzer.DefaultMaxEvents,
+        CancellationToken cancellationToken = default);
 }

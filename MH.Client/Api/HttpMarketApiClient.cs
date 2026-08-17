@@ -57,6 +57,19 @@ public sealed class HttpMarketApiClient(HttpClient httpClient) : IReadOnlyMarket
             MarketApiUris.EventImpact(serverId, itemId, eventId, asOfUtc, windowDays),
             cancellationToken);
 
+    public Task<EventPatternSummaryResponse> GetEventPatternSummaryAsync(
+        string serverId,
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int windowDays = EventPatternSummaryAnalyzer.DefaultWindowDays,
+        int historyDays = EventPatternSummaryAnalyzer.DefaultHistoryDays,
+        int maxEvents = EventPatternSummaryAnalyzer.DefaultMaxEvents,
+        CancellationToken cancellationToken = default)
+        => GetAsync<EventPatternSummaryResponse>(
+            MarketApiUris.EventPatternSummary(serverId, itemId, eventType, asOfUtc, windowDays, historyDays, maxEvents),
+            cancellationToken);
+
     private async Task<TResponse> GetAsync<TResponse>(Uri requestUri, CancellationToken cancellationToken)
         where TResponse : class
     {

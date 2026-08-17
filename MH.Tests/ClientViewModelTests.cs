@@ -31,7 +31,8 @@ public sealed class ClientApiTests
                 AsOfUtc.AddDays(-1),
                 AsOfUtc.AddDays(1),
                 CatalogKind.Demo)],
-            FakeMarketApi.CreateEventImpact("活动 1", AsOfUtc));
+            FakeMarketApi.CreateEventImpact("活动 1", AsOfUtc),
+            FakeMarketApi.CreateEventPatternSummary(MarketEventType.Holiday, AsOfUtc));
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://localhost/") };
         var api = new HttpMarketApiClient(httpClient);
         using var cancellation = new CancellationTokenSource();
@@ -53,6 +54,12 @@ public sealed class ClientApiTests
             "活动 1",
             AsOfUtc,
             cancellationToken: cancellation.Token);
+        var patternSummary = await api.GetEventPatternSummaryAsync(
+            "服务器 1",
+            "商品 中文",
+            MarketEventType.Holiday,
+            AsOfUtc,
+            cancellationToken: cancellation.Token);
 
         Assert.Equal(CatalogKind.Demo, catalog.CatalogKind);
         Assert.Equal("服务器 1", series.ServerId);
@@ -60,7 +67,8 @@ public sealed class ClientApiTests
         Assert.Equal("服务器 1", recommendation.ServerId);
         Assert.Single(events);
         Assert.Equal("活动 1", impact.Event.Id);
-        Assert.Equal(6, handler.Requests.Count);
+        Assert.Equal("event-pattern-summary-v1", patternSummary.StatisticsVersion);
+        Assert.Equal(7, handler.Requests.Count);
         Assert.All(handler.CancellationTokens, token => Assert.True(token.CanBeCanceled));
 
         var seriesRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/series", StringComparison.Ordinal));
@@ -80,6 +88,11 @@ public sealed class ClientApiTests
         var impactRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/impact", StringComparison.Ordinal));
         Assert.Contains("%E6%B4%BB%E5%8A%A8%201", impactRequest.AbsolutePath, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("windowDays=7", impactRequest.Query, StringComparison.Ordinal);
+
+        var summaryRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/events/summary", StringComparison.Ordinal));
+        Assert.Contains("type=Holiday", summaryRequest.Query, StringComparison.Ordinal);
+        Assert.Contains("historyDays=180", summaryRequest.Query, StringComparison.Ordinal);
+        Assert.Contains("maxEvents=50", summaryRequest.Query, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -112,6 +125,11 @@ public sealed class ClientApiTests
             "商品 中文",
             "活动 1",
             new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.FromHours(8)));
+        var summary = MarketApiUris.EventPatternSummary(
+            "服务器 1",
+            "商品 中文",
+            MarketEventType.Holiday,
+            new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.FromHours(8)));
 
         Assert.DoesNotContain(" ", events.OriginalString);
         Assert.DoesNotContain("服务器", events.OriginalString);
@@ -121,6 +139,10 @@ public sealed class ClientApiTests
         Assert.Contains("type=SupplyChange", events.OriginalString, StringComparison.Ordinal);
         Assert.Contains("windowDays=7", impact.OriginalString, StringComparison.Ordinal);
         Assert.Contains("asOfUtc=2025-01-01T19%3A04%3A05.0000000Z", impact.OriginalString, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("/events/summary", summary.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("type=Holiday", summary.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("historyDays=180", summary.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("maxEvents=50", summary.OriginalString, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -228,7 +250,8 @@ public sealed class ClientApiTests
         MarketIndicatorsResponse indicators,
         RecommendationPreviewResponse recommendation,
         IReadOnlyList<MarketEventDto> events,
-        EventImpactResponse eventImpact) : HttpMessageHandler
+        EventImpactResponse eventImpact,
+        EventPatternSummaryResponse patternSummary) : HttpMessageHandler
     {
         public List<Uri> Requests { get; } = [];
         public List<CancellationToken> CancellationTokens { get; } = [];
@@ -249,7 +272,11 @@ public sealed class ClientApiTests
                             ? recommendation
                             : path.EndsWith("/events", StringComparison.Ordinal)
                                 ? events
-                                : eventImpact;
+                                : path.EndsWith("/events/summary", StringComparison.Ordinal)
+                                    ? patternSummary
+                                    : path.EndsWith("/impact", StringComparison.Ordinal)
+                                        ? eventImpact
+                                        : throw new InvalidOperationException($"Unexpected path: {path}");
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = JsonContent.Create(response)
@@ -632,15 +659,19 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     private readonly Dictionary<int, TaskCompletionSource<bool>> requestWaiters = [];
     private readonly List<TaskCompletionSource<EventImpactResponse>> eventImpactRequests = [];
     private readonly Dictionary<int, TaskCompletionSource<bool>> eventImpactWaiters = [];
+    private readonly List<TaskCompletionSource<EventPatternSummaryResponse>> patternSummaryRequests = [];
+    private readonly Dictionary<int, TaskCompletionSource<bool>> patternSummaryWaiters = [];
 
     public Exception? Failure { get; set; }
     public Exception? EventsFailure { get; set; }
     public Exception? EventImpactFailure { get; set; }
+    public Exception? EventPatternSummaryFailure { get; set; }
     public CatalogResponse? Catalog { get; set; }
     public MarketSeriesResponse? Series { get; set; }
     public RecommendationPreviewResponse? Preview { get; set; }
     public IReadOnlyList<MarketEventDto>? Events { get; set; }
     public EventImpactResponse? EventImpact { get; set; }
+    public EventPatternSummaryResponse? PatternSummary { get; set; }
     public decimal DataAgeHours { get; set; } = 12.5m;
     public decimal? RobustMedian7Days { get; set; } = 100m;
     public decimal? Return7Days { get; set; } = 0.05m;
@@ -649,13 +680,15 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public bool BlockCatalog { get; set; }
     public bool BlockRecommendation { get; set; }
     public bool BlockEventImpact { get; set; }
+    public bool BlockPatternSummary { get; set; }
     public int CatalogCalls { get; private set; }
     public int SeriesCalls { get; private set; }
     public int IndicatorsCalls { get; private set; }
     public int RecommendationCalls { get; private set; }
     public int EventsCalls { get; private set; }
     public int EventImpactCalls { get; private set; }
-    public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls + EventsCalls + EventImpactCalls;
+    public int EventPatternSummaryCalls { get; private set; }
+    public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls + EventsCalls + EventImpactCalls + EventPatternSummaryCalls;
     public List<(string ServerId, string ItemId, DateTimeOffset? FromUtc, DateTimeOffset? ToUtc)> SeriesRequests { get; } = [];
     public List<(string ServerId, string ItemId, DateTimeOffset FromUtc, DateTimeOffset ToUtc, MarketEventType? Type)> EventRequests { get; } = [];
     public TaskCompletionSource<bool> CatalogStarted { get; } = NewCompletionSource<bool>();
@@ -781,6 +814,40 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
         }
     }
 
+    public Task<EventPatternSummaryResponse> GetEventPatternSummaryAsync(
+        string serverId,
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int windowDays = EventPatternSummaryAnalyzer.DefaultWindowDays,
+        int historyDays = EventPatternSummaryAnalyzer.DefaultHistoryDays,
+        int maxEvents = EventPatternSummaryAnalyzer.DefaultMaxEvents,
+        CancellationToken cancellationToken = default)
+    {
+        EventPatternSummaryCalls++;
+        if (EventPatternSummaryFailure is not null)
+        {
+            return Task.FromException<EventPatternSummaryResponse>(EventPatternSummaryFailure);
+        }
+
+        if (!BlockPatternSummary)
+        {
+            return Task.FromResult(PatternSummary ?? CreateEventPatternSummary(eventType, asOfUtc));
+        }
+
+        lock (sync)
+        {
+            var request = NewCompletionSource<EventPatternSummaryResponse>();
+            patternSummaryRequests.Add(request);
+            foreach (var waiter in patternSummaryWaiters.Where(pair => patternSummaryRequests.Count >= pair.Key).Select(pair => pair.Value))
+            {
+                waiter.TrySetResult(true);
+            }
+
+            return request.Task;
+        }
+    }
+
     public Task WaitForRecommendationCountAsync(int count)
     {
         lock (sync)
@@ -824,6 +891,29 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
         lock (sync)
         {
             eventImpactRequests[index].TrySetResult(response);
+        }
+    }
+
+    public Task WaitForPatternSummaryCountAsync(int count)
+    {
+        lock (sync)
+        {
+            if (patternSummaryRequests.Count >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var waiter = NewCompletionSource<bool>();
+            patternSummaryWaiters[count] = waiter;
+            return waiter.Task;
+        }
+    }
+
+    public void CompletePatternSummary(int index, EventPatternSummaryResponse response)
+    {
+        lock (sync)
+        {
+            patternSummaryRequests[index].TrySetResult(response);
         }
     }
 
@@ -886,6 +976,31 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
             VisibleSupplyChangeVsBefore = -0.1m
         };
         return new EventImpactResponse(eventItem, asOfUtc, EventImpactAnalyzer.DefaultWindowDays, before, during, after);
+    }
+
+    public static EventPatternSummaryResponse CreateEventPatternSummary(
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int sampleEventCount = 4)
+    {
+        var metric = new EventPatternMetricSummary(true, sampleEventCount, 0.1m, 3, 0, 1, 0.75m, null);
+        return new EventPatternSummaryResponse(
+            "server-1",
+            "item-1",
+            eventType,
+            asOfUtc,
+            EventPatternSummaryAnalyzer.DefaultWindowDays,
+            EventPatternSummaryAnalyzer.DefaultHistoryDays,
+            EventPatternSummaryAnalyzer.DefaultMaxEvents,
+            EventPatternSummaryAnalyzer.StatisticsVersion,
+            EventPatternSummaryAnalyzer.NeutralThreshold,
+            sampleEventCount,
+            asOfUtc.AddDays(-EventPatternSummaryAnalyzer.DefaultHistoryDays),
+            asOfUtc,
+            metric,
+            metric,
+            metric,
+            metric);
     }
 
     private static EventImpactPhaseResult CreateEventPhase(

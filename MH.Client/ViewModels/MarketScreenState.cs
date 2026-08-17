@@ -18,4 +18,6 @@ public sealed record MarketScreenSnapshot(
     RecommendationPreviewResponse Recommendation,
     IReadOnlyList<MarketEventDto> RelevantEvents,
     EventImpactResponse? SelectedEventImpact,
-    string? EventResearchError);
+    string? EventResearchError,
+    EventPatternSummaryResponse? EventPatternSummary,
+    string? EventPatternSummaryError);

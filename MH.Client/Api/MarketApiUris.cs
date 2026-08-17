@@ -72,6 +72,24 @@ public static class MarketApiUris
                 Query("windowDays", windowDays.ToString(CultureInfo.InvariantCulture))
             ]);
 
+    public static Uri EventPatternSummary(
+        string serverId,
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int windowDays = EventPatternSummaryAnalyzer.DefaultWindowDays,
+        int historyDays = EventPatternSummaryAnalyzer.DefaultHistoryDays,
+        int maxEvents = EventPatternSummaryAnalyzer.DefaultMaxEvents)
+        => Build(
+            $"/api/v1/markets/{Segment(serverId)}/{Segment(itemId)}/events/summary",
+            [
+                Query("type", eventType.ToString()),
+                Query("asOfUtc", FormatUtc(asOfUtc)),
+                Query("windowDays", windowDays.ToString(CultureInfo.InvariantCulture)),
+                Query("historyDays", historyDays.ToString(CultureInfo.InvariantCulture)),
+                Query("maxEvents", maxEvents.ToString(CultureInfo.InvariantCulture))
+            ]);
+
     private static string Segment(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);

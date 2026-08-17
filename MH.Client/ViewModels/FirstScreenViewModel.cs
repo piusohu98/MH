@@ -282,6 +282,10 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
 
     public string? EventResearchError => Snapshot?.EventResearchError;
 
+    public EventPatternSummaryResponse? SelectedEventPatternSummary => Snapshot?.EventPatternSummary;
+
+    public string? EventPatternSummaryError => Snapshot?.EventPatternSummaryError;
+
     public bool CanInitialize => State != MarketViewState.Loading;
 
     public bool CanRefresh => CanInitialize
@@ -598,6 +602,31 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
     public string EventResearchErrorText
         => EventResearchError ?? string.Empty;
 
+    public string EventPatternSummaryText
+    {
+        get
+        {
+            var summary = SelectedEventPatternSummary;
+            if (summary is null)
+            {
+                return EventPatternSummaryError is null ? "暂无相似活动归纳。" : "相似活动归纳暂不可用。";
+            }
+
+            return string.Join(
+                Environment.NewLine,
+                $"相似活动历史归纳（{GetEventTypeText(summary.EventType)}）",
+                $"样本活动 {summary.SampleEventCount} 个 · 历史窗口 {summary.HistoryDays} 天 · 统计版本 {summary.StatisticsVersion}",
+                FormatPatternMetric("活动中价格", summary.DuringPrice, isSupply: false),
+                FormatPatternMetric("活动后价格", summary.AfterPrice, isSupply: false),
+                FormatPatternMetric("活动中在售数量", summary.DuringVisibleSupply, isSupply: true),
+                FormatPatternMetric("活动后在售数量", summary.AfterVisibleSupply, isSupply: true),
+                $"中性区间：±{FormatPercent(summary.NeutralThreshold)}；仅表示历史样本归纳，不是买卖建议。");
+        }
+    }
+
+    public string EventPatternSummaryErrorText
+        => EventPatternSummaryError ?? string.Empty;
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)
@@ -864,7 +893,9 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
             recommendation,
             eventData.Events,
             eventData.Impact,
-            eventData.Error);
+            eventData.Error,
+            eventData.PatternSummary,
+            eventData.PatternSummaryError);
         LastSuccessfulAtUtc = utcNow().ToUniversalTime();
         IsStale = indicators.DataAgeHours is > RecommendationRule.MaxDataAgeHours;
         ErrorMessage = null;
@@ -878,6 +909,8 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         MarketScreenSnapshot? previousSnapshot,
         CancellationToken cancellationToken)
     {
+        IReadOnlyList<MarketEventDto> relevantEvents;
+        string? eventError = null;
         try
         {
             var events = await apiClient.GetEventsAsync(
@@ -891,26 +924,7 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
                 throw new InvalidOperationException("市场服务返回了空活动列表。");
             }
 
-            var relevantEvents = FilterRelevantEvents(events);
-            var focusEvent = SelectFocusEvent(relevantEvents, asOfUtc);
-            if (focusEvent is null)
-            {
-                return new EventLoadResult(relevantEvents, null, null);
-            }
-
-            var impact = await apiClient.GetEventImpactAsync(
-                serverId,
-                itemId,
-                focusEvent.Id,
-                asOfUtc,
-                EventImpactAnalyzer.DefaultWindowDays,
-                cancellationToken);
-            if (impact is null)
-            {
-                throw new InvalidOperationException("市场服务返回了空活动影响结果。");
-            }
-
-            return new EventLoadResult(relevantEvents, impact, null);
+            relevantEvents = FilterRelevantEvents(events);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -922,14 +936,108 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
                 && string.Equals(prior.Series.ServerId, serverId, StringComparison.Ordinal)
                 && string.Equals(prior.Series.ItemId, itemId, StringComparison.Ordinal))
             {
-                return new EventLoadResult(
-                    prior.RelevantEvents,
-                    prior.SelectedEventImpact,
-                    "活动资料暂时不可用，显示上次成功结果。");
+                relevantEvents = prior.RelevantEvents;
+                eventError = "活动资料暂时不可用，显示上次成功结果。";
             }
-
-            return new EventLoadResult(EmptyEvents, null, "活动资料暂时不可用。");
+            else
+            {
+                relevantEvents = EmptyEvents;
+                eventError = "活动资料暂时不可用。";
+            }
         }
+
+        var focusEvent = SelectFocusEvent(relevantEvents, asOfUtc);
+        EventImpactResponse? impact = null;
+        if (focusEvent is not null)
+        {
+            try
+            {
+                impact = await apiClient.GetEventImpactAsync(
+                    serverId,
+                    itemId,
+                    focusEvent.Id,
+                    asOfUtc,
+                    EventImpactAnalyzer.DefaultWindowDays,
+                    cancellationToken);
+                if (impact is null
+                    || !string.Equals(impact.Event.Id, focusEvent.Id, StringComparison.Ordinal)
+                    || !string.Equals(impact.Event.ServerId, serverId, StringComparison.Ordinal)
+                    || (impact.Event.ItemId is not null
+                        && !string.Equals(impact.Event.ItemId, itemId, StringComparison.Ordinal))
+                    || impact.AsOfUtc.ToUniversalTime() != asOfUtc.ToUniversalTime())
+                {
+                    throw new InvalidOperationException("市场服务返回了不匹配的活动影响结果。");
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsOptionalEventFailure(exception, cancellationToken))
+            {
+                if (previousSnapshot is { } prior
+                    && string.Equals(prior.Series.ServerId, serverId, StringComparison.Ordinal)
+                    && string.Equals(prior.Series.ItemId, itemId, StringComparison.Ordinal)
+                    && prior.SelectedEventImpact?.Event.Id == focusEvent.Id
+                    && prior.SelectedEventImpact.AsOfUtc.ToUniversalTime() == asOfUtc.ToUniversalTime())
+                {
+                    impact = prior.SelectedEventImpact;
+                    eventError ??= "活动资料暂时不可用，显示上次成功结果。";
+                }
+                else
+                {
+                    eventError ??= "活动资料暂时不可用。";
+                }
+            }
+        }
+
+        EventPatternSummaryResponse? patternSummary = null;
+        string? patternSummaryError = null;
+        if (focusEvent is not null)
+        {
+            try
+            {
+                patternSummary = await apiClient.GetEventPatternSummaryAsync(
+                    serverId,
+                    itemId,
+                    focusEvent.Type,
+                    asOfUtc,
+                    EventPatternSummaryAnalyzer.DefaultWindowDays,
+                    EventPatternSummaryAnalyzer.DefaultHistoryDays,
+                    EventPatternSummaryAnalyzer.DefaultMaxEvents,
+                    cancellationToken);
+                if (patternSummary is null
+                    || !string.Equals(patternSummary.ServerId, serverId, StringComparison.Ordinal)
+                    || !string.Equals(patternSummary.ItemId, itemId, StringComparison.Ordinal)
+                    || patternSummary.EventType != focusEvent.Type
+                    || patternSummary.AsOfUtc.ToUniversalTime() != asOfUtc.ToUniversalTime())
+                {
+                    throw new InvalidOperationException("市场服务返回了不匹配的相似活动归纳结果。");
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsOptionalEventFailure(exception, cancellationToken))
+            {
+                if (previousSnapshot is { } prior
+                    && string.Equals(prior.Series.ServerId, serverId, StringComparison.Ordinal)
+                    && string.Equals(prior.Series.ItemId, itemId, StringComparison.Ordinal)
+                    && prior.EventPatternSummary?.EventType == focusEvent.Type
+                    && prior.EventPatternSummary.AsOfUtc.ToUniversalTime() == asOfUtc.ToUniversalTime())
+                {
+                    patternSummary = prior.EventPatternSummary;
+                    patternSummaryError = "相似活动归纳暂时不可用，显示上次同类活动结果。";
+                }
+                else
+                {
+                    patternSummaryError = "相似活动归纳暂时不可用。";
+                }
+            }
+        }
+
+        return new EventLoadResult(relevantEvents, impact, eventError, patternSummary, patternSummaryError);
     }
 
     public static IReadOnlyList<MarketEventDto> FilterRelevantEvents(IEnumerable<MarketEventDto> events)
@@ -1057,6 +1165,8 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(RelevantEvents));
         OnPropertyChanged(nameof(SelectedEventImpact));
         OnPropertyChanged(nameof(EventResearchError));
+        OnPropertyChanged(nameof(SelectedEventPatternSummary));
+        OnPropertyChanged(nameof(EventPatternSummaryError));
         OnPropertyChanged(nameof(EventCalendarText));
         OnPropertyChanged(nameof(FocusEventTitleText));
         OnPropertyChanged(nameof(FocusEventPeriodText));
@@ -1068,6 +1178,8 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EventEvidenceText));
         OnPropertyChanged(nameof(EventResearchNoticeText));
         OnPropertyChanged(nameof(EventResearchErrorText));
+        OnPropertyChanged(nameof(EventPatternSummaryText));
+        OnPropertyChanged(nameof(EventPatternSummaryErrorText));
         OnPropertyChanged(nameof(CanInitialize));
         OnPropertyChanged(nameof(CanRefresh));
     }
@@ -1125,6 +1237,22 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
 
     private static string FormatPhaseEvidence(string label, EventImpactPhaseResult phase)
         => $"{label}：{GetAvailabilityText(phase.Availability)} · 原始日线 {phase.RawBarCount} · 价格内点 {phase.PriceInlierCount} · 在售数量样本 {phase.VolumeSampleCount}";
+
+    private static string FormatPatternMetric(
+        string label,
+        EventPatternMetricSummary metric,
+        bool isSupply)
+    {
+        if (!metric.Available)
+        {
+            return $"{label}：样本不足（可比较 {metric.ComparableEventCount} 个，需要至少 3 个）";
+        }
+
+        var median = metric.MedianChange.HasValue
+            ? FormatSignedPercent(metric.MedianChange.Value)
+            : "—";
+        return $"{label}：中位变化 {median} · 上涨 {metric.IncreaseCount} · 下跌 {metric.DecreaseCount} · 基本不变 {metric.StableCount} · 方向一致度 {FormatPercent(metric.DirectionConsistency)}";
+    }
 
     private static string GetComparisonReasonText(string? reason)
         => reason switch
@@ -1237,5 +1365,7 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
     private sealed record EventLoadResult(
         IReadOnlyList<MarketEventDto> Events,
         EventImpactResponse? Impact,
-        string? Error);
+        string? Error,
+        EventPatternSummaryResponse? PatternSummary,
+        string? PatternSummaryError);
 }

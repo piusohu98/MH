@@ -204,6 +204,93 @@ app.MapGet("/api/v1/markets/{serverId}/{itemId}/events", async (
     return Results.Ok(events);
 });
 
+app.MapGet("/api/v1/markets/{serverId}/{itemId}/events/summary", async (
+    string serverId,
+    string itemId,
+    string? type,
+    string? asOfUtc,
+    string? windowDays,
+    string? historyDays,
+    string? maxEvents,
+    MarketDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var requestedWindowDays = EventPatternSummaryAnalyzer.DefaultWindowDays;
+    var requestedHistoryDays = EventPatternSummaryAnalyzer.DefaultHistoryDays;
+    var requestedMaxEvents = EventPatternSummaryAnalyzer.DefaultMaxEvents;
+    var validType = TryParseMarketEventType(type, out var eventType)
+        && eventType is MarketEventType.Holiday or MarketEventType.SupplyChange;
+    if (!validType
+        || !TryParseRequiredUtc(asOfUtc, out var cutoffUtc)
+        || (!string.IsNullOrWhiteSpace(windowDays)
+            && (!int.TryParse(windowDays, NumberStyles.Integer, CultureInfo.InvariantCulture, out requestedWindowDays)
+                || requestedWindowDays is < EventPatternSummaryAnalyzer.MinimumWindowDays or > EventPatternSummaryAnalyzer.MaximumWindowDays))
+        || (!string.IsNullOrWhiteSpace(historyDays)
+            && (!int.TryParse(historyDays, NumberStyles.Integer, CultureInfo.InvariantCulture, out requestedHistoryDays)
+                || requestedHistoryDays is < EventPatternSummaryAnalyzer.MinimumHistoryDays or > EventPatternSummaryAnalyzer.MaximumHistoryDays))
+        || (!string.IsNullOrWhiteSpace(maxEvents)
+            && (!int.TryParse(maxEvents, NumberStyles.Integer, CultureInfo.InvariantCulture, out requestedMaxEvents)
+                || requestedMaxEvents is < EventPatternSummaryAnalyzer.MinimumMaxEvents or > EventPatternSummaryAnalyzer.MaximumMaxEvents)))
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid event pattern summary parameters",
+            detail: $"type must be Holiday or SupplyChange; asOfUtc is required with an offset; windowDays must be between {EventPatternSummaryAnalyzer.MinimumWindowDays} and {EventPatternSummaryAnalyzer.MaximumWindowDays}; historyDays must be between {EventPatternSummaryAnalyzer.MinimumHistoryDays} and {EventPatternSummaryAnalyzer.MaximumHistoryDays}; maxEvents must be between {EventPatternSummaryAnalyzer.MinimumMaxEvents} and {EventPatternSummaryAnalyzer.MaximumMaxEvents}.");
+    }
+
+    var market = await db.Servers.AsNoTracking()
+        .Where(x => x.Id == serverId)
+        .Join(
+            db.Items.AsNoTracking().Where(x => x.Id == itemId),
+            server => server.CatalogKind,
+            item => item.CatalogKind,
+            (server, _) => new { server.CatalogKind })
+        .SingleOrDefaultAsync(cancellationToken);
+    if (market is null)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Market entity not found",
+            detail: "serverId or itemId does not exist in a queryable catalog.");
+    }
+
+    var historyStartUtc = cutoffUtc.AddDays(-requestedHistoryDays);
+    var marketEvents = await db.Events.AsNoTracking()
+        .Where(x => x.ServerId == serverId
+            && x.CatalogKind == market.CatalogKind
+            && x.Type == eventType!.Value
+            && (x.ItemId == null || x.ItemId == itemId)
+            && x.StartsAtUtc >= historyStartUtc
+            && x.EndsAtUtc > x.StartsAtUtc
+            && x.EndsAtUtc <= cutoffUtc)
+        .OrderByDescending(x => x.EndsAtUtc)
+        .ThenByDescending(x => x.StartsAtUtc)
+        .ThenBy(x => x.Id)
+        .Take(requestedMaxEvents)
+        .ToListAsync(cancellationToken);
+
+    var observationStartUtc = historyStartUtc.AddDays(-requestedWindowDays);
+    var observations = await db.ListingObservations.AsNoTracking()
+        .Where(x => x.ServerId == serverId
+            && x.ItemId == itemId
+            && x.ObservedAtUtc >= observationStartUtc
+            && x.ObservedAtUtc <= cutoffUtc)
+        .OrderBy(x => x.ObservedAtUtc)
+        .ToListAsync(cancellationToken);
+    var dailyBars = PriceBarAggregator.Aggregate(observations);
+    var summary = EventPatternSummaryAnalyzer.Analyze(
+        serverId,
+        itemId,
+        eventType!.Value,
+        marketEvents,
+        dailyBars,
+        cutoffUtc,
+        requestedWindowDays,
+        requestedHistoryDays,
+        requestedMaxEvents);
+    return Results.Ok(summary);
+});
+
 app.MapGet("/api/v1/markets/{serverId}/{itemId}/events/{eventId}/impact", async (
     string serverId,
     string itemId,

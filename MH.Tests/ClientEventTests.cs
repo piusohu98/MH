@@ -57,6 +57,7 @@ public sealed class ClientEventPresentationTests
 
         Assert.Equal(1, api.EventsCalls);
         Assert.Equal(1, api.EventImpactCalls);
+        Assert.Equal(1, api.EventPatternSummaryCalls);
         var eventRequest = Assert.Single(api.EventRequests);
         Assert.Equal(AsOfUtc.AddDays(-30), eventRequest.FromUtc);
         Assert.Equal(AsOfUtc.AddDays(30), eventRequest.ToUtc);
@@ -72,6 +73,9 @@ public sealed class ClientEventPresentationTests
         Assert.Contains("样本可用", viewModel.EventEvidenceText, StringComparison.Ordinal);
         Assert.Contains("原始日线 3", viewModel.EventEvidenceText, StringComparison.Ordinal);
         Assert.Contains("不是买卖建议", viewModel.EventResearchNoticeText, StringComparison.Ordinal);
+        Assert.Contains("相似活动历史归纳", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
+        Assert.Contains("样本活动 4 个", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
+        Assert.Contains("活动中价格", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
         Assert.Contains("模拟供应减少", viewModel.EventCalendarText, StringComparison.Ordinal);
         Assert.Contains("模拟供应增加", viewModel.EventCalendarText, StringComparison.Ordinal);
         Assert.DoesNotContain("DayNight", viewModel.EventCalendarText, StringComparison.Ordinal);
@@ -94,6 +98,7 @@ public sealed class ClientEventPresentationTests
         Assert.Contains(nameof(FirstScreenViewModel.DuringPriceImpactText), propertyNames);
         Assert.Contains(nameof(FirstScreenViewModel.EventEvidenceText), propertyNames);
         Assert.Contains(nameof(FirstScreenViewModel.EventResearchNoticeText), propertyNames);
+        Assert.Contains(nameof(FirstScreenViewModel.EventPatternSummaryText), propertyNames);
     }
 
     [Fact]
@@ -265,6 +270,68 @@ public sealed class ClientEventPresentationTests
         Assert.Equal(MarketViewState.Ready, viewModel.State);
         Assert.Equal("new-impact", viewModel.SelectedEventImpact!.Event.Id);
         Assert.Contains("原始日线 9", viewModel.EventEvidenceText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PatternSummaryFailureIsIndependentAndDoesNotReuseAcrossEventTypes()
+    {
+        var api = CreateApi(
+            [Event("holiday", MarketEventType.Holiday, "DEMO Festival", AsOfUtc.AddDays(-1), AsOfUtc.AddDays(1))],
+            FakeMarketApi.CreateEventImpact("holiday", AsOfUtc));
+        var viewModel = await LoadAsync(api);
+        Assert.NotNull(viewModel.SelectedEventPatternSummary);
+
+        api.EventPatternSummaryFailure = new InvalidOperationException("summary unavailable");
+        api.Events = [Event("supply", MarketEventType.SupplyChange, "DEMO Supply Shortage", AsOfUtc.AddDays(-1), AsOfUtc.AddDays(1))];
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.Null(viewModel.SelectedEventPatternSummary);
+        Assert.Equal("相似活动归纳暂时不可用。", viewModel.EventPatternSummaryErrorText);
+        Assert.Contains("相似活动归纳暂不可用", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ActivityFailuresDoNotReuseDifferentAsOfSnapshot()
+    {
+        var api = CreateApi(
+            [Event("holiday", MarketEventType.Holiday, "DEMO Festival", AsOfUtc.AddDays(-1), AsOfUtc.AddDays(1))],
+            FakeMarketApi.CreateEventImpact("holiday", AsOfUtc));
+        var viewModel = await LoadAsync(api);
+
+        api.EventImpactFailure = new InvalidOperationException("impact unavailable");
+        api.EventPatternSummaryFailure = new InvalidOperationException("summary unavailable");
+        viewModel.SelectedAsOfUtc = AsOfUtc.AddDays(1);
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.Null(viewModel.SelectedEventImpact);
+        Assert.Null(viewModel.SelectedEventPatternSummary);
+        Assert.Equal("相似活动归纳暂时不可用。", viewModel.EventPatternSummaryErrorText);
+    }
+
+    [Fact]
+    public async Task OlderPatternSummaryCannotOverwriteNewerRefresh()
+    {
+        var api = CreateApi(
+            [Event("holiday", MarketEventType.Holiday, "DEMO Festival", AsOfUtc.AddDays(-1), AsOfUtc.AddDays(1))],
+            FakeMarketApi.CreateEventImpact("holiday", AsOfUtc));
+        api.BlockPatternSummary = true;
+        var viewModel = CreateViewModel(api);
+
+        var older = viewModel.RefreshAsync();
+        await api.WaitForPatternSummaryCountAsync(1);
+        var newer = viewModel.RefreshAsync();
+        await api.WaitForPatternSummaryCountAsync(2);
+
+        api.CompletePatternSummary(1, FakeMarketApi.CreateEventPatternSummary(MarketEventType.Holiday, AsOfUtc, sampleEventCount: 9));
+        await newer;
+        api.CompletePatternSummary(0, FakeMarketApi.CreateEventPatternSummary(MarketEventType.Holiday, AsOfUtc, sampleEventCount: 1));
+        await older;
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.Equal(9, viewModel.SelectedEventPatternSummary!.SampleEventCount);
+        Assert.Contains("样本活动 9 个", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
     }
 
     private static FakeMarketApi CreateApi(
