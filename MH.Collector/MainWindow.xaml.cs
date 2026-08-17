@@ -51,7 +51,7 @@ public partial class MainWindow : Window
             ReviewRequiredCountText.Text = result.ReviewRequiredCount.ToString();
             RejectedCountText.Text = result.RejectedCount.ToString();
             StatusText.Text = result.Error is null
-                ? $"已完成 {result.Frames.Count} 帧回放。只读取本地文件，不上传、不调用服务、不自动点击。"
+                ? $"已完成 {result.Frames.Count} 帧回放。当前使用确定性离线回放，不上传、不调用服务、不自动点击。"
                 : result.Error;
         }
         catch (OperationCanceledException)

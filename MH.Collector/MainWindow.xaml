@@ -76,7 +76,7 @@
                    Grid.Row="4"
                    Margin="0,12,0,0"
                    Foreground="#5F6368"
-                   Text="只读取本地 manifest.json 和图片，不上传、不调用服务、不自动点击。"
+                   Text="只读取本地 manifest.json 和图片；当前使用确定性离线回放，不代表真实 OCR 识别率。"
                    TextWrapping="Wrap" />
     </Grid>
 </Window>

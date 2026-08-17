@@ -2,18 +2,26 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MH.Collector.Ocr;
 using MH.Core.OfflineReplay;
 
 namespace MH.Collector;
 
 public sealed class OfflineReplayService
 {
+    private readonly IOcrRecognizer ocrRecognizer;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true
     };
+
+    public OfflineReplayService(IOcrRecognizer? ocrRecognizer = null)
+    {
+        this.ocrRecognizer = ocrRecognizer ?? new DeterministicFakeOcrRecognizer();
+    }
 
     public async Task<OfflineReplayScanResult> ReplayAsync(
         string directoryPath,
@@ -87,7 +95,7 @@ public sealed class OfflineReplayService
         return new OfflineReplayScanResult(new ReadOnlyCollection<OfflineReplayFrameResult>(results), null);
     }
 
-    private static async Task<OfflineReplayFrameResult> ReplayFrameAsync(
+    private async Task<OfflineReplayFrameResult> ReplayFrameAsync(
         string directoryPath,
         string replayId,
         OfflineReplayDocumentFrame frame,
@@ -138,9 +146,44 @@ public sealed class OfflineReplayService
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var candidates = (frame.Candidates ?? [])
-            .Select(candidate => new MH.Core.OfflineReplay.OfflineReplayCandidate(
+        var candidateHints = (frame.Candidates ?? [])
+            .Select(candidate => new OcrRecognitionCandidate(
                 candidate.ItemId ?? string.Empty,
+                candidate.DisplayName,
+                candidate.Confidence,
+                candidate.IsConfirmed))
+            .ToArray();
+        OcrRecognitionResult recognition;
+        try
+        {
+            recognition = await ocrRecognizer.RecognizeAsync(
+                new OcrRecognitionRequest(frame.FrameId!, fullImagePath, frame.RawText, candidateHints),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            return OfflineReplayFrameResult.Rejected(frame, $"OCR 识别失败：{exception.Message}");
+        }
+
+        if (recognition is null)
+        {
+            return OfflineReplayFrameResult.Rejected(frame, "OCR 识别器未返回结果。");
+        }
+
+        if (recognition.Status == OcrRecognitionStatus.Failed)
+        {
+            return OfflineReplayFrameResult.Rejected(
+                frame,
+                recognition.Error ?? "OCR 识别失败。");
+        }
+
+        var candidates = (recognition.Candidates ?? [])
+            .Select(candidate => new MH.Core.OfflineReplay.OfflineReplayCandidate(
+                candidate.ItemId,
                 candidate.DisplayName,
                 candidate.Confidence,
                 candidate.IsConfirmed))
@@ -152,7 +195,7 @@ public sealed class OfflineReplayService
                 relativePath,
                 frame.CapturedAtUtc!.Value),
             candidates,
-            frame.RawText);
+            recognition.RawText);
 
         return OfflineReplayFrameResult.From(frame, classified);
     }
@@ -201,7 +244,7 @@ public sealed record OfflineReplayFrameResult(
             frame.CapturedAtUtc!.Value,
             result.Status,
             result.Issues.Count == 0
-                ? "识别结果可用"
+                ? "离线回放结果可用"
                 : string.Join("；", result.Issues.Select(issue => issue.Detail)),
             result.Candidates.Count == 0
                 ? "无候选"
