@@ -152,6 +152,59 @@ public sealed class OfflineReplayReviewStore
         return await ComputeManifestSha256Async(directory, cancellationToken).ConfigureAwait(false);
     }
 
+    internal async Task<OfflineReplayReviewLoadResult> LoadForExportAsync(
+        string directoryPath,
+        IReadOnlyList<OfflineReplayFrameResult> frames,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
+        ArgumentNullException.ThrowIfNull(frames);
+
+        var directory = GetVerifiedDirectoryPath(directoryPath);
+        var sidecarPath = GetSidecarPathFromVerifiedDirectory(directory);
+        if (!File.Exists(sidecarPath))
+        {
+            return new(false, true, string.Empty, []);
+        }
+
+        try
+        {
+            var sidecarBytes = await File.ReadAllBytesAsync(sidecarPath, cancellationToken).ConfigureAwait(false);
+            var sidecarSha256 = Convert.ToHexString(SHA256.HashData(sidecarBytes));
+            var manifestSha256 = await ComputeManifestSha256Async(directory, cancellationToken).ConfigureAwait(false);
+            var sidecar = JsonSerializer.Deserialize<OfflineReplayReviewSidecar>(sidecarBytes, JsonOptions);
+            if (sidecar is null
+                || !string.Equals(sidecar.Version, SidecarVersion, StringComparison.Ordinal)
+                || !string.Equals(sidecar.ManifestSha256, manifestSha256, StringComparison.Ordinal)
+                || sidecar.Decisions is null)
+            {
+                return new(true, false, sidecarSha256, []);
+            }
+
+            return new(true, true, sidecarSha256, ValidateAndOrderDecisions(frames, sidecar.Decisions));
+        }
+        catch (JsonException)
+        {
+            return new(true, false, string.Empty, []);
+        }
+        catch (NotSupportedException)
+        {
+            return new(true, false, string.Empty, []);
+        }
+        catch (InvalidOperationException)
+        {
+            return new(true, false, string.Empty, []);
+        }
+        catch (IOException)
+        {
+            return new(true, false, string.Empty, []);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new(true, false, string.Empty, []);
+        }
+    }
+
     private static string GetSidecarPathFromVerifiedDirectory(string verifiedDirectoryPath)
     {
         var sidecarPath = Path.GetFullPath(Path.Combine(verifiedDirectoryPath, SidecarFileName));
@@ -250,3 +303,9 @@ public sealed class OfflineReplayReviewStore
         public IReadOnlyList<OfflineReplayReviewDecision>? Decisions { get; init; }
     }
 }
+
+internal sealed record OfflineReplayReviewLoadResult(
+    bool Present,
+    bool IsValid,
+    string SidecarSha256,
+    IReadOnlyList<OfflineReplayReviewDecision> Decisions);

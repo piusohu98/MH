@@ -140,7 +140,13 @@ public sealed class OfflineReplayService
         cancellationToken.ThrowIfCancellationRequested();
         File.Delete(checkpointPath);
 
-        var scanResult = new OfflineReplayScanResult(new ReadOnlyCollection<OfflineReplayFrameResult>(results), null);
+        var scanResult = new OfflineReplayScanResult(
+            new ReadOnlyCollection<OfflineReplayFrameResult>(results),
+            null,
+            manifestSha256)
+        {
+            ReplayId = manifest.ReplayId
+        };
         progress?.Report(new(
             scanResult.ReviewRequiredCount > 0
                 ? OfflineReplayProgressState.ReviewRequired
@@ -234,6 +240,7 @@ public sealed class OfflineReplayService
                 || result.Reason is null
                 || result.CandidateText is null
                 || result.Candidates is null
+                || result.Issues is null
                 || (result.Status == OfflineReplayStatus.ReviewRequired
                     && result.Candidates.Count == 0)
                 || !Enum.IsDefined(result.Status))
@@ -453,8 +460,11 @@ public sealed record OfflineReplayProgress(
 
 public sealed record OfflineReplayScanResult(
     IReadOnlyList<OfflineReplayFrameResult> Frames,
-    string? Error)
+    string? Error,
+    string? ManifestSha256 = null)
 {
+    public string? ReplayId { get; init; }
+
     public int SucceededCount => Frames.Count(frame => frame.Status == OfflineReplayStatus.Accepted);
 
     public int ReviewRequiredCount => Frames.Count(frame => frame.Status == OfflineReplayStatus.ReviewRequired);
@@ -474,6 +484,10 @@ public sealed record OfflineReplayFrameResult(
     string CandidateText)
 {
     public IReadOnlyList<OfflineReplayCandidate> Candidates { get; init; } = [];
+
+    public string? RawText { get; init; }
+
+    public IReadOnlyList<OfflineReplayIssue> Issues { get; init; } = [];
 
     public string CapturedAtText => CapturedAtUtc == default
         ? "未提供"
@@ -502,7 +516,9 @@ public sealed record OfflineReplayFrameResult(
                 ? "无候选"
                 : string.Join("、", result.Candidates.Select(candidate => candidate.DisplayName ?? candidate.ItemId)))
         {
-            Candidates = result.Candidates
+            Candidates = result.Candidates,
+            RawText = result.RawText,
+            Issues = result.Issues
         };
 
     internal static OfflineReplayFrameResult Rejected(OfflineReplayDocumentFrame frame, string reason)
@@ -512,7 +528,18 @@ public sealed record OfflineReplayFrameResult(
             frame.CapturedAtUtc ?? default,
             OfflineReplayStatus.Rejected,
             reason,
-            "无候选");
+            "无候选")
+        {
+            RawText = frame.RawText,
+            Candidates = (frame.Candidates ?? [])
+                .Select(candidate => new OfflineReplayCandidate(
+                    candidate.ItemId ?? string.Empty,
+                    candidate.DisplayName,
+                    candidate.Confidence,
+                    candidate.IsConfirmed))
+                .ToArray(),
+            Issues = [new("replay-rejected", reason)]
+        };
 }
 
 internal sealed class OfflineReplayDocument

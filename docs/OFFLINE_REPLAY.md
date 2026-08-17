@@ -92,3 +92,9 @@ dotnet run --project MH.Collector\MH.Collector.csproj
 ```
 
 sidecar 绑定当前 `manifest.json` 的 SHA-256 和帧 ID。损坏 JSON、manifest 变化、重复/未知帧、非 `ReviewRequired` 帧或非法候选会被整体忽略；写入使用临时文件后原子替换，原始 manifest 和 checkpoint 不会被覆盖。复核决定当前只用于本地恢复和 UI 展示，不调用 Server API、不上传图片、不自动写入行情，也不能证明真实 OCR 或页面状态。
+
+## 证据导出
+
+可将一次成功的本地回放导出为同目录的 `.offline-replay-export.json`。导出版本为 `offline-replay-export-v1`，必须绑定当前 `manifest.json` 的 SHA-256，并记录复核 sidecar 是否存在及其 SHA-256；每帧还会计算图片 SHA-256、保留原始分类、候选、理由/问题和决定来源。输出使用调用者提供的 UTC `exportedAtUtc`，按捕获时间、图片路径和帧 ID 稳定排序，并以临时文件原子替换。
+
+有效决定明确区分为：原始 `Accepted` 使用 `AutoAccepted`；需复核帧被明确接受或拒绝时使用 `ManuallyAccepted`/`ManuallyRejected`；没有决定的需复核帧使用 `Unprocessed`；原始拒绝帧也只保留证据并标记为不可进入行情。导出不猜测价格、数量或区服，不调用 Server/API，不写入 SQLite 行情表，也不上传图片；它只证明本地回放证据可审计，不能证明真实 OCR 识别率或页面检测。
