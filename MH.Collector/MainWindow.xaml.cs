@@ -58,7 +58,14 @@ public partial class MainWindow : Window
         StatusText.Text = "正在读取本地回放目录...";
         try
         {
-            var progress = new Progress<OfflineReplayProgress>(UpdateReplayProgress);
+            var progress = new Progress<OfflineReplayProgress>(update =>
+            {
+                if (ReferenceEquals(replayCancellation, activeCancellation)
+                    && !activeCancellation.IsCancellationRequested)
+                {
+                    UpdateReplayProgress(update);
+                }
+            });
             var result = await replayService.ReplayAsync(
                 selectedDirectory,
                 activeCancellation.Token,
