@@ -43,7 +43,8 @@
 - 窗口提供“重新加载目录”和“刷新行情”两个入口；空目录、无行情、首次断网、非法历史时点和较小窗口滚动均有明确降级。
 - 新增 5 类确定性规则验证行情：上涨缩量、下跌放量、短中期冲突、高波动和数据不足；测试通过真实分析器与建议规则验证预期安全行为，并覆盖未来极端行情隔离。
 - 新增 `scripts/Validate-Demo.ps1` 和 `docs/VALIDATION.md`，可用独立 SQLite 一键验收真实 HTTP 数据闭环。
-- Client 第一屏已接通只读模拟行情；Collector 仍是可编译空壳。
+- Client 第一屏已接通只读模拟行情；Collector 已增加阶段 3.0 本地截图目录回放入口，只读取 `manifest.json` 和目录内图片，不上传、不调用服务、不自动点击。
+- 阶段 3.0 离线回放契约已固定为 `offline-replay-v1`：manifest/frame 元数据、图片路径安全校验、确定性排序、商品候选置信度和人工确认状态均有纯 Core 校验；低置信度、多候选或未确认结果不得静默接受。
 
 ## 2. 已验证结果
 
@@ -101,6 +102,21 @@ dotnet build MH.slnx -c Release --no-restore
 
 新增测试覆盖活跃度/高价值需求分数边界、至少 3 个高价值商品门槛、OCR 异常与在售数量独立处理、样本不足、48 小时陈旧停评分、未来观察隔离、UTC 等价、API 参数边界、未知区服、客户端同区同一时点保留和不同历史时点隔离。独立真实 HTTP 冒烟返回 DEMO 活跃度 98.5、高价值需求 50.5，并带样本、置信度、证据和范围声明。WPF 启动冒烟确认“区服观察”完整显示且不与原行情、活动观察和囤货参考重叠。
 
+2026-08-17 阶段 3.0 离线截图回放首片复验：
+
+```text
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~OfflineReplayContractTests
+结果：16 passed，0 failed，0 skipped
+
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore
+结果：238 passed，0 failed，0 skipped
+
+dotnet build MH.slnx -c Release --no-restore
+结果：5/5 项目成功，0 warning，0 error
+```
+
+Collector Release 产物已完成无窗口服务冒烟：不存在的回放目录返回明确错误和 0 帧，不触发网络或数据库调用。另有 1 项独立 Migration 测试在临时空 SQLite 上执行 `MigrateAsync`，确认初始迁移记录及当前 8 张业务表均可用。阶段 3.0 仍未接入真实 OCR 模型，不宣称识别率或 P95 识别性能。
+
 客户端节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。
 
 活动事件研究节点同样由 Luna/max 完成初版；主任务审查发现并修复了缺省 `windowDays` 未按约定使用 7、价格与在售数量基线被错误绑定，以及未来观察测试落在事件总窗口之外三个缺口。修复后由主任务独立重跑 Release 构建、全量测试和真实 HTTP 冒烟，结果如上。
@@ -147,12 +163,12 @@ daf218a feat(client): focus dashboard on game market players
 
 ## 3. 尚未完成与已知欠账
 
-- 当前使用 `EnsureCreated` 首次建库，尚未生成正式 EF Core Migration；升级数据库前必须补上。
+- 已生成首个正式 EF Core Migration 工件和 Design 依赖，但运行时仍使用 `EnsureCreated` 以兼容没有 `__EFMigrationsHistory` 的既有数据库；在补完 schema 校验和 baseline 策略前，不得直接切换到 `MigrateAsync`。
 - 回测当前没有无歧义的完整平仓周期，因此未输出命中率；后续应先定义持仓批次和已实现盈亏口径。
 - 可见供给只作为代理指标，尚未进入回测成交容量约束。
 - 建议预览已接入只读 Server API 和 WPF 第一屏，但尚无建议持久化；当前仍是研究预览，不代表真实资金建议。
 - 跨区事件标准化已完成最小闭环：`cross-server-event-standardization-v1` 先在每个区按活动前稳健中位价计算相对变化，再以区服级中位数等权汇总跨区中位数、P25/P75、方向计数和一致度；价格与在售数量独立处理，少于 2 个可比较区服返回样本不足。当前 DEMO 只有 1 个区服，未伪造第二个区服或真实跨区结论。
-- Client 第一屏仍需人工检查 DPI、字体和长文本布局；Collector 只有工程壳，尚无 OCR、热键或采集状态机。
+- Client 第一屏仍需人工检查 DPI、字体和长文本布局；Collector 已有离线回放壳，但尚无真实 OCR、热键、悬浮查价或采集状态机。
 - 尚无真实截图、OCR 模型、商品别名字典和标注集，不能评估真实识别率。
 - 尚未实现自包含 Windows 发布和 CI。
 - 区服人数和高消费玩家只能做代理指数，尚无校准数据，不能输出具体人数。
@@ -178,7 +194,7 @@ dotnet run --project MH.Client\MH.Client.csproj
 4. 暂停服务后再次刷新，旧图表应保留，状态变为离线/陈旧，候选买卖必须降为不可执行；恢复服务后可再次刷新。
 5. 展开“查看分析依据（进阶）”，确认技术指标不会默认抢占主界面；缩小窗口后左右两列都应可滚动，重点检查高 DPI、中文字体和长理由是否截断。
 
-阶段 2 已正式关闭。下一步直接进入阶段 3 的 OCR 与悬浮查价；在没有真实截图和标注集前，先做离线图片/目录调试闭环，不宣称真实识别率。
+阶段 2 已正式关闭，阶段 3.0 离线图片/目录回放首片已完成。下一步进入阶段 3.1：接入本地 RapidOcrNet 适配器和离线模型调试；在没有真实截图和标注集前，不宣称真实识别率。
 
 交接时应保留以下指标口径：
 
@@ -192,9 +208,9 @@ dotnet run --project MH.Client\MH.Client.csproj
 ## 5. 可直接交给后续 Codex 任务的提示词
 
 ```text
-继续 MH 项目阶段 3：在阶段 2 行情面板、活动研究、跨区标准化和区服代理指标完成的基础上，实现本地 OCR 与悬浮查价。
+继续 MH 项目阶段 3.1：在阶段 2 行情面板、活动研究、跨区标准化、区服代理指标和阶段 3.0 离线截图回放完成的基础上，接入本地 OCR 适配器与离线模型调试。
 先阅读 docs/PROJECT_PLAN.md、docs/DEVELOPMENT_PLAN.md、docs/STATUS.md。
-先建立离线图片和截图目录调试闭环，再接 RapidOcrNet 中文模型、商品候选匹配和低置信度人工确认。截图不得上传；没有真实截图和标注集时不能宣称真实识别率。
+阶段 3.0 已建立离线图片和截图目录调试闭环；下一步接 RapidOcrNet 中文模型、商品候选匹配和低置信度人工确认。截图不得上传；没有真实截图和标注集时不能宣称真实识别率。
 ```
 
 ## 6. 安全提醒

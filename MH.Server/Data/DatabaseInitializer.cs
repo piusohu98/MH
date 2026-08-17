@@ -13,6 +13,8 @@ public static class DatabaseInitializer
         await using var scope = services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MarketDbContext>();
 
+        // Keep existing EnsureCreated databases compatible until a verified baseline
+        // migration path is available for databases without __EFMigrationsHistory.
         await db.Database.EnsureCreatedAsync(cancellationToken);
         await ConfigureSqliteAsync(db, cancellationToken);
 

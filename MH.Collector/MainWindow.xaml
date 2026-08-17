@@ -1,12 +1,82 @@
 ﻿<Window x:Class="MH.Collector.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:MH.Collector"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        Title="MH 本地截图回放"
+        Height="560"
+        Width="980"
+        MinHeight="420"
+        MinWidth="760">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
 
+        <StackPanel Grid.Row="0" Orientation="Horizontal">
+            <Button Width="150"
+                    Height="32"
+                    Margin="0,0,10,0"
+                    Click="SelectDirectoryButton_Click"
+                    Content="选择截图目录" />
+            <Button x:Name="ReplayButton"
+                    Width="100"
+                    Height="32"
+                    Click="ReplayButton_Click"
+                    Content="重新回放"
+                    IsEnabled="False" />
+        </StackPanel>
+
+        <TextBlock x:Name="DirectoryText"
+                   Grid.Row="1"
+                   Margin="0,12,0,12"
+                   Foreground="#5F6368"
+                   Text="尚未选择目录"
+                   TextTrimming="CharacterEllipsis" />
+
+        <UniformGrid Grid.Row="2" Columns="3" Margin="0,0,0,12">
+            <Border Margin="0,0,8,0" Padding="10" Background="#E8F5E9" BorderBrush="#A5D6A7" BorderThickness="1">
+                <StackPanel>
+                    <TextBlock Foreground="#2E7D32" Text="成功" />
+                    <TextBlock x:Name="SucceededCountText" FontSize="22" FontWeight="SemiBold" Text="0" />
+                </StackPanel>
+            </Border>
+            <Border Margin="4,0" Padding="10" Background="#FFF8E1" BorderBrush="#FFE082" BorderThickness="1">
+                <StackPanel>
+                    <TextBlock Foreground="#8D6E63" Text="需人工复核" />
+                    <TextBlock x:Name="ReviewRequiredCountText" FontSize="22" FontWeight="SemiBold" Text="0" />
+                </StackPanel>
+            </Border>
+            <Border Margin="8,0,0,0" Padding="10" Background="#FFEBEE" BorderBrush="#EF9A9A" BorderThickness="1">
+                <StackPanel>
+                    <TextBlock Foreground="#C62828" Text="拒绝" />
+                    <TextBlock x:Name="RejectedCountText" FontSize="22" FontWeight="SemiBold" Text="0" />
+                </StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <ListView x:Name="FramesList"
+                  Grid.Row="3"
+                  BorderBrush="#DADCE0"
+                  BorderThickness="1">
+            <ListView.View>
+                <GridView AllowsColumnReorder="False">
+                    <GridViewColumn Header="时间" DisplayMemberBinding="{Binding CapturedAtText}" Width="145" />
+                    <GridViewColumn Header="结果" DisplayMemberBinding="{Binding StatusText}" Width="105" />
+                    <GridViewColumn Header="图片" DisplayMemberBinding="{Binding ImagePath}" Width="220" />
+                    <GridViewColumn Header="候选商品" DisplayMemberBinding="{Binding CandidateText}" Width="190" />
+                    <GridViewColumn Header="原因" DisplayMemberBinding="{Binding Reason}" Width="230" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+
+        <TextBlock x:Name="StatusText"
+                   Grid.Row="4"
+                   Margin="0,12,0,0"
+                   Foreground="#5F6368"
+                   Text="只读取本地 manifest.json 和图片，不上传、不调用服务、不自动点击。"
+                   TextWrapping="Wrap" />
     </Grid>
 </Window>
