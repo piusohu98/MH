@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MH.Collector.Ocr;
@@ -10,6 +11,9 @@ namespace MH.Collector;
 
 public sealed class OfflineReplayService
 {
+    private const string CheckpointFileName = ".offline-replay-checkpoint.json";
+    private const string CheckpointVersion = "offline-replay-checkpoint-v1";
+
     private readonly IOcrRecognizer ocrRecognizer;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -17,6 +21,13 @@ public sealed class OfflineReplayService
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true
+    };
+
+    private static readonly JsonSerializerOptions CheckpointJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
     public OfflineReplayService(IOcrRecognizer? ocrRecognizer = null)
@@ -42,14 +53,13 @@ public sealed class OfflineReplayService
             return OfflineReplayScanResult.Failed("未找到 manifest.json。");
         }
 
+        byte[] manifestBytes;
         OfflineReplayDocument? document;
         try
         {
-            await using var stream = File.OpenRead(manifestPath);
-            document = await JsonSerializer.DeserializeAsync<OfflineReplayDocument>(
-                stream,
-                JsonOptions,
-                cancellationToken).ConfigureAwait(false);
+            manifestBytes = await File.ReadAllBytesAsync(manifestPath, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            document = JsonSerializer.Deserialize<OfflineReplayDocument>(manifestBytes, JsonOptions);
         }
         catch (JsonException exception)
         {
@@ -80,6 +90,8 @@ public sealed class OfflineReplayService
             return OfflineReplayScanResult.Failed($"manifest 校验失败：{reason}");
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+
         var catalog = document?.Catalog is null
             ? null
             : document.Catalog
@@ -97,15 +109,162 @@ public sealed class OfflineReplayService
             .ThenBy(frame => frame.RelativeImagePath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(frame => frame.FrameId, StringComparer.Ordinal)
             .ToArray();
-        var results = new List<OfflineReplayFrameResult>(orderedFrames.Length);
-        foreach (var frame in orderedFrames)
+
+        var checkpointPath = GetCheckpointPath(fullDirectoryPath);
+        var manifestSha256 = Convert.ToHexString(SHA256.HashData(manifestBytes));
+        var resumedResults = await LoadCheckpointAsync(
+            checkpointPath,
+            manifestSha256,
+            orderedFrames,
+            cancellationToken).ConfigureAwait(false);
+        var results = new List<OfflineReplayFrameResult>(resumedResults.Count + orderedFrames.Length);
+        results.AddRange(resumedResults);
+        for (var index = results.Count; index < orderedFrames.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            results.Add(await ReplayFrameAsync(fullDirectoryPath, manifest.ReplayId, frame, catalog, cancellationToken)
-                .ConfigureAwait(false));
+            var frame = orderedFrames[index];
+            var result = await ReplayFrameAsync(fullDirectoryPath, manifest.ReplayId, frame, catalog, cancellationToken)
+                .ConfigureAwait(false);
+            results.Add(result);
+            await WriteCheckpointAsync(checkpointPath, manifestSha256, results).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        File.Delete(checkpointPath);
+
         return new OfflineReplayScanResult(new ReadOnlyCollection<OfflineReplayFrameResult>(results), null);
+    }
+
+    private static string GetCheckpointPath(string verifiedDirectoryPath)
+    {
+        var checkpointPath = Path.GetFullPath(Path.Combine(verifiedDirectoryPath, CheckpointFileName));
+        var relativePath = Path.GetRelativePath(verifiedDirectoryPath, checkpointPath);
+        if (!string.Equals(relativePath, CheckpointFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("回放 checkpoint 路径必须位于已校验的目录内。");
+        }
+
+        return checkpointPath;
+    }
+
+    private static async Task<IReadOnlyList<OfflineReplayFrameResult>> LoadCheckpointAsync(
+        string checkpointPath,
+        string manifestSha256,
+        IReadOnlyList<OfflineReplayDocumentFrame> orderedFrames,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(checkpointPath))
+        {
+            return [];
+        }
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(checkpointPath, cancellationToken).ConfigureAwait(false);
+            var checkpoint = JsonSerializer.Deserialize<OfflineReplayCheckpoint>(json, CheckpointJsonOptions);
+            return IsUsableCheckpoint(checkpoint, manifestSha256, orderedFrames)
+                ? checkpoint!.CompletedFrames!
+                : [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+        catch (NotSupportedException)
+        {
+            return [];
+        }
+        catch (IOException)
+        {
+            return [];
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    private static bool IsUsableCheckpoint(
+        OfflineReplayCheckpoint? checkpoint,
+        string manifestSha256,
+        IReadOnlyList<OfflineReplayDocumentFrame> orderedFrames)
+    {
+        if (checkpoint is null
+            || !string.Equals(checkpoint.Version, CheckpointVersion, StringComparison.Ordinal)
+            || !string.Equals(checkpoint.ManifestSha256, manifestSha256, StringComparison.Ordinal)
+            || checkpoint.CompletedFrames is null
+            || checkpoint.CompletedFrames.Count > orderedFrames.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < checkpoint.CompletedFrames.Count; index++)
+        {
+            var result = checkpoint.CompletedFrames[index];
+            var frame = orderedFrames[index];
+            if (result is null
+                || !string.Equals(result.FrameId, frame.FrameId, StringComparison.Ordinal)
+                || !string.Equals(result.ImagePath, frame.RelativeImagePath, StringComparison.Ordinal)
+                || frame.CapturedAtUtc is null
+                || result.CapturedAtUtc != frame.CapturedAtUtc.Value
+                || result.Reason is null
+                || result.CandidateText is null
+                || !Enum.IsDefined(result.Status))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static async Task WriteCheckpointAsync(
+        string checkpointPath,
+        string manifestSha256,
+        IReadOnlyList<OfflineReplayFrameResult> completedFrames)
+    {
+        var temporaryPath = checkpointPath + ".tmp";
+        try
+        {
+            await using (var stream = new FileStream(
+                temporaryPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await JsonSerializer.SerializeAsync(
+                    stream,
+                    new OfflineReplayCheckpoint
+                    {
+                        Version = CheckpointVersion,
+                        ManifestSha256 = manifestSha256,
+                        CompletedFrames = completedFrames.ToArray()
+                    },
+                    CheckpointJsonOptions).ConfigureAwait(false);
+                await stream.FlushAsync().ConfigureAwait(false);
+            }
+
+            File.Move(temporaryPath, checkpointPath, overwrite: true);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(temporaryPath))
+                {
+                    File.Delete(temporaryPath);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     private async Task<OfflineReplayFrameResult> ReplayFrameAsync(
@@ -231,6 +390,23 @@ public sealed class OfflineReplayService
         }
 
         return OfflineReplayFrameResult.From(frame, classified);
+    }
+
+    private sealed class OfflineReplayCheckpoint
+    {
+        [JsonConstructor]
+        public OfflineReplayCheckpoint()
+        {
+        }
+
+        [JsonPropertyName("version")]
+        public string? Version { get; init; }
+
+        [JsonPropertyName("manifestSha256")]
+        public string? ManifestSha256 { get; init; }
+
+        [JsonPropertyName("completedFrames")]
+        public IReadOnlyList<OfflineReplayFrameResult>? CompletedFrames { get; init; }
     }
 }
 
