@@ -52,6 +52,7 @@
 - `CollectorRunStateMachine` 已固定 `Idle/Observing/Capturing/Recognizing/ReviewRequired`、五类人工停止状态和 `Stopped` 的转移规则。非法/未知事件 fail-closed，`Stopped` 不能直接恢复；这只是状态契约，当前没有真实页面分类器或窗口捕获器。
 - Collector 已增加 `.offline-replay-review.json` 人工复核决定 sidecar：只接受当前 `ReviewRequired` 帧已有候选，或明确拒绝；未处理不算成功，sidecar 绑定 manifest SHA-256、原子写入并在损坏/变化/未知帧时整体忽略。WPF 列表已提供候选选择、接受和拒绝动作，但决定仍只用于本地恢复和展示，不上传、不写入行情。
 - Collector 已增加 `offline-replay-export-v1` 本地证据导出：绑定 manifest/review sidecar SHA-256，逐帧计算图片 SHA-256，区分自动接受、人工接受、人工拒绝和未处理；导出不猜价格/数量/区服，不调用 Server、不写入行情 SQLite。
+- Client 已增加 `Ctrl+Alt+M` 全局热键和单实例缓存行情悬浮窗：只展示当前 `Snapshot.Series` 作用域的区服/商品、参考价、范围、采集截止、数据年龄和安全文案；无快照、离线或陈旧时 fail-closed，不读取屏幕、不截图、不调用 OCR。热键冲突会显示注册失败，退出时注销。
 
 ## 2. 已验证结果
 
@@ -205,6 +206,21 @@ dotnet build MH.slnx -c Release --no-restore
 
 新增 `OfflineReplayExportDocument`、`OfflineReplayExportService` 和导出夹具，验证固定 `exportedAtUtc` 下字节稳定、帧顺序、image hash、复核决定分类、损坏 sidecar、manifest 变化和原始文件不变。导出只产生本地证据 JSON，不证明真实 OCR、页面检测或行情写入。
 
+2026-08-17 Client 缓存行情悬浮窗节点复验：
+
+```text
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~MarketOverlayTests
+结果：8 passed，0 failed，0 skipped
+
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore
+结果：306 passed，0 failed，0 skipped
+
+dotnet build MH.slnx -c Release --no-restore
+结果：5/5 项目成功，0 warning，0 error
+```
+
+新增 `GlobalHotkeyService`、`MarketOverlayProjection` 和单实例 `MarketOverlayWindow`，测试覆盖安全状态解析、Ctrl+Alt+M 修饰键、负坐标工作区位置和无快照文案。未进行多显示器/DPI 人工目视验收，不宣称屏幕识别、OCR P95 或真实游戏兼容性。
+
 客户端节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。
 
 活动事件研究节点同样由 Luna/max 完成初版；主任务审查发现并修复了缺省 `windowDays` 未按约定使用 7、价格与在售数量基线被错误绑定，以及未来观察测试落在事件总窗口之外三个缺口。修复后由主任务独立重跑 Release 构建、全量测试和真实 HTTP 冒烟，结果如上。
@@ -256,8 +272,8 @@ daf218a feat(client): focus dashboard on game market players
 - 可见供给只作为代理指标，尚未进入回测成交容量约束。
 - 建议预览已接入只读 Server API 和 WPF 第一屏，但尚无建议持久化；当前仍是研究预览，不代表真实资金建议。
 - 跨区事件标准化已完成最小闭环：`cross-server-event-standardization-v1` 先在每个区按活动前稳健中位价计算相对变化，再以区服级中位数等权汇总跨区中位数、P25/P75、方向计数和一致度；价格与在售数量独立处理，少于 2 个可比较区服返回样本不足。当前 DEMO 只有 1 个区服，未伪造第二个区服或真实跨区结论。
-- Client 第一屏仍需人工检查 DPI、字体和长文本布局；Collector 已完成离线 OCR 边界、目录匹配和采集状态转移契约，但尚无真实中文 OCR、热键、悬浮查价或真实页面检测。
-- 尚无真实截图、OCR 模型、商品别名字典和标注集，不能评估真实识别率。
+- Client 第一屏和缓存行情悬浮窗仍需人工检查 DPI、字体、长文本及多显示器行为；Collector 已完成离线 OCR 边界、目录匹配、人工复核、证据导出和采集状态转移契约，但尚无真实中文 OCR、屏幕识别或真实页面检测。
+- 尚无真实截图、OCR 模型、商品别名字典和标注集，不能评估真实识别率或 OCR P95。
 - 尚未实现自包含 Windows 发布和 CI。
 - 区服人数和高消费玩家只能做代理指数，尚无校准数据，不能输出具体人数。
 - 用户已明确取消跨商品建议榜和个人仓位，不再作为未完成项；现有单商品建议和目标最大仓位口径保持不变。
@@ -282,7 +298,7 @@ dotnet run --project MH.Client\MH.Client.csproj
 4. 暂停服务后再次刷新，旧图表应保留，状态变为离线/陈旧，候选买卖必须降为不可执行；恢复服务后可再次刷新。
 5. 展开“查看分析依据（进阶）”，确认技术指标不会默认抢占主界面；缩小窗口后左右两列都应可滚动，重点检查高 DPI、中文字体和长理由是否截断。
 
-阶段 2 已正式关闭，阶段 3.0 离线图片/目录回放首片和阶段 3.1 的 OCR 边界、确定性 Fake、商品候选匹配已完成。下一步只有在中文模型、字典和标注夹具可核验时才接入真实 RapidOcrNet 适配器；在此之前继续完善离线状态机和人工复核，不宣称真实识别率。
+阶段 2 已正式关闭，阶段 3.0 离线图片/目录回放、阶段 3.1 的 OCR 边界、确定性 Fake、商品候选匹配、人工复核 sidecar、证据导出和缓存行情悬浮窗已完成。下一步只有在中文模型、字典、标注夹具和页面捕获边界可核验时才接入真实 RapidOcrNet/屏幕识别适配器；不宣称真实识别率或 OCR P95。
 
 交接时应保留以下指标口径：
 

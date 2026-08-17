@@ -58,6 +58,11 @@
             <StackPanel>
                 <TextBlock FontSize="26" FontWeight="SemiBold" Text="MH 市场监控" />
                 <TextBlock Margin="0,4,0,0" Style="{StaticResource MutedText}" Text="只读研究工具 · 仅展示人工决策参考，不自动买卖" />
+                <TextBlock x:Name="HotkeyStatusText"
+                           Margin="0,4,0,0"
+                           FontSize="11"
+                           Style="{StaticResource MutedText}"
+                           Text="悬浮窗热键：等待主窗口句柄" />
             </StackPanel>
             <Border Grid.Column="1" Padding="14,8" CornerRadius="8">
                 <Border.Style>

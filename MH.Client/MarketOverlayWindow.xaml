@@ -1,0 +1,64 @@
+<Window x:Class="MH.Client.MarketOverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MH 缓存行情"
+        Width="330"
+        MinWidth="280"
+        SizeToContent="Height"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        AllowsTransparency="True"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        Background="Transparent">
+    <Border Background="#F0141E2B"
+            BorderBrush="#7A8EA8"
+            BorderThickness="1"
+            CornerRadius="8"
+            Padding="14">
+        <StackPanel>
+            <DockPanel Margin="0,0,0,8">
+                <TextBlock FontSize="16"
+                           FontWeight="SemiBold"
+                           Foreground="#F8FAFC"
+                           Text="缓存行情" />
+                <TextBlock DockPanel.Dock="Right"
+                           Margin="12,2,0,0"
+                           Foreground="#CBD5E1"
+                           Text="{Binding StateText}" />
+            </DockPanel>
+            <TextBlock Foreground="#CBD5E1" Text="{Binding ServerName}" />
+            <TextBlock Margin="0,2,0,10"
+                       FontSize="18"
+                       FontWeight="SemiBold"
+                       Foreground="#F8FAFC"
+                       Text="{Binding ItemName}"
+                       TextWrapping="Wrap" />
+            <TextBlock Foreground="#CBD5E1" Text="当前参考价" />
+            <TextBlock Margin="0,2,0,8"
+                       FontSize="24"
+                       FontWeight="SemiBold"
+                       Foreground="#F8FAFC"
+                       Text="{Binding ReferencePriceText}" />
+            <TextBlock Foreground="#CBD5E1" Text="当日最低 ~ 最高" />
+            <TextBlock Margin="0,2,0,8" Foreground="#F8FAFC" Text="{Binding LatestRangeText}" />
+            <TextBlock Foreground="#CBD5E1" Text="采集截止（UTC）" />
+            <TextBlock Margin="0,2,0,8" Foreground="#F8FAFC" Text="{Binding CollectionCutoffText}" />
+            <TextBlock Foreground="#CBD5E1" Text="数据年龄 / 客户端刷新" />
+            <TextBlock Margin="0,2,0,8" Foreground="#F8FAFC">
+                <Run Text="{Binding DataAgeText}" />
+                <Run Text=" · " />
+                <Run Text="{Binding ClientRefreshText}" />
+            </TextBlock>
+            <TextBlock Foreground="#FDE68A"
+                       Text="{Binding RecommendationText}"
+                       TextWrapping="Wrap" />
+            <TextBlock Margin="0,8,0,0"
+                       Foreground="#CBD5E1"
+                       FontSize="11"
+                       Text="{Binding SafetyText}"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+    </Border>
+</Window>

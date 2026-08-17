@@ -31,4 +31,7 @@ public partial class MainWindow : Window
 
     private async void InitializeButton_Click(object sender, RoutedEventArgs e)
         => await viewModel.InitializeAsync();
+
+    public void SetHotkeyStatus(string status)
+        => HotkeyStatusText.Text = status;
 }
