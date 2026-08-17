@@ -291,6 +291,10 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
 
     public string? CrossServerEventSummaryError => Snapshot?.CrossServerEventSummaryError;
 
+    public ServerMarketProfileResponse? SelectedServerMarketProfile => Snapshot?.ServerMarketProfile;
+
+    public string? ServerMarketProfileError => Snapshot?.ServerMarketProfileError;
+
     public bool CanInitialize => State != MarketViewState.Loading;
 
     public bool CanRefresh => CanInitialize
@@ -657,6 +661,41 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
     public string CrossServerEventSummaryErrorText
         => CrossServerEventSummaryError ?? string.Empty;
 
+    public string ActivityIndexText
+        => FormatServerProxyMetric("区服活跃度", SelectedServerMarketProfile?.Activity);
+
+    public string HighValueDemandIndexText
+        => FormatServerProxyMetric("高价值需求", SelectedServerMarketProfile?.HighValueDemand);
+
+    public string ServerMarketProfileEvidenceText
+    {
+        get
+        {
+            var profile = SelectedServerMarketProfile;
+            if (profile is null)
+            {
+                return ServerMarketProfileError is null ? "暂无区服观察样本。" : "区服观察暂不可用。";
+            }
+
+            var evidence = profile.Activity.Evidence
+                .Concat(profile.HighValueDemand.Evidence)
+                .GroupBy(item => item.Code, StringComparer.Ordinal)
+                .Select(group => group.First())
+                .Select(FormatServerProxyEvidence)
+                .ToArray();
+            return evidence.Length == 0
+                ? "样本不足，暂不展示推断依据。"
+                : string.Join(" · ", evidence);
+        }
+    }
+
+    public string ServerMarketProfileNoticeText
+        => SelectedServerMarketProfile?.ScopeNotice
+            ?? "区服活跃度和高价值需求只是可见行情代理，不代表真实人数或成交量。";
+
+    public string ServerMarketProfileErrorText
+        => ServerMarketProfileError ?? string.Empty;
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)
@@ -715,6 +754,11 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
             SelectedAsOfUtc = latestBar.EndUtc.ToUniversalTime();
             var indicators = await apiClient.GetIndicatorsAsync(serverId, itemId, SelectedAsOfUtc.Value, requestCancellation.Token);
             var recommendation = await apiClient.GetRecommendationAsync(serverId, itemId, SelectedAsOfUtc.Value, requestCancellation.Token);
+            var serverProfile = await LoadServerMarketProfileAsync(
+                serverId,
+                SelectedAsOfUtc.Value,
+                Snapshot,
+                requestCancellation.Token);
             var eventData = await LoadEventDataAsync(
                 serverId,
                 itemId,
@@ -726,7 +770,7 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
                 return;
             }
 
-            ApplyLoadedSnapshot(loadedCatalog, series, indicators, recommendation, eventData);
+            ApplyLoadedSnapshot(loadedCatalog, series, indicators, recommendation, eventData, serverProfile);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || !IsCurrent(request.Version))
         {
@@ -796,6 +840,11 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
                 requestCancellation.Token);
             var indicators = await apiClient.GetIndicatorsAsync(serverId, itemId, asOfUtc, requestCancellation.Token);
             var recommendation = await apiClient.GetRecommendationAsync(serverId, itemId, asOfUtc, requestCancellation.Token);
+            var serverProfile = await LoadServerMarketProfileAsync(
+                serverId,
+                asOfUtc,
+                Snapshot,
+                requestCancellation.Token);
             var eventData = await LoadEventDataAsync(
                 serverId,
                 itemId,
@@ -808,7 +857,7 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
                 return;
             }
 
-            ApplyLoadedSnapshot(catalog, series, indicators, recommendation, eventData);
+            ApplyLoadedSnapshot(catalog, series, indicators, recommendation, eventData, serverProfile);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || !IsCurrent(request.Version))
         {
@@ -913,7 +962,8 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         MarketSeriesResponse series,
         MarketIndicatorsResponse indicators,
         RecommendationPreviewResponse recommendation,
-        EventLoadResult eventData)
+        EventLoadResult eventData,
+        ServerProfileLoadResult serverProfile)
     {
         Catalog = loadedCatalog;
         Snapshot = new MarketScreenSnapshot(
@@ -927,11 +977,50 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
             eventData.PatternSummary,
             eventData.PatternSummaryError,
             eventData.CrossServerSummary,
-            eventData.CrossServerSummaryError);
+            eventData.CrossServerSummaryError,
+            serverProfile.Profile,
+            serverProfile.Error);
         LastSuccessfulAtUtc = utcNow().ToUniversalTime();
         IsStale = indicators.DataAgeHours is > RecommendationRule.MaxDataAgeHours;
         ErrorMessage = null;
         State = MarketViewState.Ready;
+    }
+
+    private async Task<ServerProfileLoadResult> LoadServerMarketProfileAsync(
+        string serverId,
+        DateTimeOffset asOfUtc,
+        MarketScreenSnapshot? previousSnapshot,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var profile = await apiClient.GetServerMarketProfileAsync(serverId, asOfUtc, cancellationToken);
+            if (profile is null
+                || !string.Equals(profile.ServerId, serverId, StringComparison.Ordinal)
+                || profile.AsOfUtc.ToUniversalTime() != asOfUtc.ToUniversalTime())
+            {
+                throw new InvalidOperationException("市场服务返回了不匹配的区服观察结果。");
+            }
+
+            return new ServerProfileLoadResult(profile, null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (IsOptionalEventFailure(exception, cancellationToken))
+        {
+            if (previousSnapshot is { } prior
+                && string.Equals(prior.Series.ServerId, serverId, StringComparison.Ordinal)
+                && prior.ServerMarketProfile?.AsOfUtc.ToUniversalTime() == asOfUtc.ToUniversalTime())
+            {
+                return new ServerProfileLoadResult(
+                    prior.ServerMarketProfile,
+                    "区服观察暂时不可用，显示上次同区同一时点结果。");
+            }
+
+            return new ServerProfileLoadResult(null, "区服观察暂时不可用。");
+        }
     }
 
     private async Task<EventLoadResult> LoadEventDataAsync(
@@ -1252,6 +1341,8 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EventPatternSummaryError));
         OnPropertyChanged(nameof(SelectedCrossServerEventSummary));
         OnPropertyChanged(nameof(CrossServerEventSummaryError));
+        OnPropertyChanged(nameof(SelectedServerMarketProfile));
+        OnPropertyChanged(nameof(ServerMarketProfileError));
         OnPropertyChanged(nameof(EventCalendarText));
         OnPropertyChanged(nameof(FocusEventTitleText));
         OnPropertyChanged(nameof(FocusEventPeriodText));
@@ -1267,6 +1358,11 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EventPatternSummaryErrorText));
         OnPropertyChanged(nameof(CrossServerEventSummaryText));
         OnPropertyChanged(nameof(CrossServerEventSummaryErrorText));
+        OnPropertyChanged(nameof(ActivityIndexText));
+        OnPropertyChanged(nameof(HighValueDemandIndexText));
+        OnPropertyChanged(nameof(ServerMarketProfileEvidenceText));
+        OnPropertyChanged(nameof(ServerMarketProfileNoticeText));
+        OnPropertyChanged(nameof(ServerMarketProfileErrorText));
         OnPropertyChanged(nameof(CanInitialize));
         OnPropertyChanged(nameof(CanRefresh));
     }
@@ -1351,6 +1447,57 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         }
 
         return $"{label}：中位变化 {FormatSignedPercent(metric.MedianChange!.Value)} · 区服范围 {FormatSignedPercent(metric.P25Change!.Value)} ~ {FormatSignedPercent(metric.P75Change!.Value)} · 上涨 {metric.IncreaseCount} · 下跌 {metric.DecreaseCount} · 基本不变 {metric.StableCount} · 一致度 {FormatPercent(metric.DirectionConsistency)}";
+    }
+
+    private static string FormatServerProxyMetric(string label, ServerProxyMetric? metric)
+    {
+        if (metric is null)
+        {
+            return $"{label}：暂不可用";
+        }
+
+        if (metric.Availability != ServerProxyAvailability.Available || !metric.Score.HasValue)
+        {
+            var reason = metric.UnavailableReason switch
+            {
+                "stale-data" => "数据已过期",
+                "insufficient-coverage" => "覆盖商品或采集时点不足",
+                "insufficient-transitions" => "价格/在售数量变化样本不足",
+                "insufficient-high-value-items" => "高价值商品样本不足",
+                "insufficient-high-value-transitions" => "高价值商品变化样本不足",
+                _ => "样本不足"
+            };
+            return $"{label}：暂不可判断（{reason}）";
+        }
+
+        var level = metric.Level switch
+        {
+            ServerProxyLevel.Low => "低",
+            ServerProxyLevel.Medium => "中",
+            ServerProxyLevel.High => "高",
+            _ => "未知"
+        };
+        return $"{label}：{level} · 指数 {metric.Score.Value.ToString("0.0", CultureInfo.InvariantCulture)}/100 · "
+            + $"可信度 {FormatPercent(metric.Confidence)} · 商品 {metric.ObservedItemCount} · 变化样本 {metric.TransitionCount}";
+    }
+
+    private static string FormatServerProxyEvidence(ServerProxyEvidence evidence)
+    {
+        var label = evidence.Code switch
+        {
+            "catalog-item-coverage" => "目录覆盖",
+            "capture-day-coverage" => "采集天数覆盖",
+            "visible-quantity-change-rate" => "在售数量变化频率",
+            "price-change-rate" => "价格变化频率",
+            "high-value-price-threshold" => "高价值样本价格门槛",
+            "visible-quantity-decline-rate" => "高价值品在售收缩频率",
+            "price-resilience-after-quantity-decline" => "在售收缩时价格保持频率",
+            _ => evidence.Code
+        };
+        var value = evidence.Unit == "ratio"
+            ? FormatPercent(evidence.Value)
+            : evidence.Value.ToString("N0", CultureInfo.InvariantCulture);
+        return $"{label} {value}";
     }
 
     private static string GetComparisonReasonText(string? reason)
@@ -1469,4 +1616,8 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         string? PatternSummaryError,
         CrossServerEventStandardizationResponse? CrossServerSummary,
         string? CrossServerSummaryError);
+
+    private sealed record ServerProfileLoadResult(
+        ServerMarketProfileResponse? Profile,
+        string? Error);
 }

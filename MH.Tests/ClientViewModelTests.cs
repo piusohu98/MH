@@ -33,7 +33,8 @@ public sealed class ClientApiTests
                 CatalogKind.Demo)],
             FakeMarketApi.CreateEventImpact("活动 1", AsOfUtc),
             FakeMarketApi.CreateEventPatternSummary(MarketEventType.Holiday, AsOfUtc),
-            FakeMarketApi.CreateCrossServerSummary("商品 中文", MarketEventType.Holiday, AsOfUtc));
+            FakeMarketApi.CreateCrossServerSummary("商品 中文", MarketEventType.Holiday, AsOfUtc),
+            FakeMarketApi.CreateServerMarketProfile("服务器 1", AsOfUtc));
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://localhost/") };
         var api = new HttpMarketApiClient(httpClient);
         using var cancellation = new CancellationTokenSource();
@@ -42,6 +43,7 @@ public sealed class ClientApiTests
         var series = await api.GetSeriesAsync("服务器 1", "商品 中文", AsOfUtc.AddDays(-30), AsOfUtc, cancellation.Token);
         var indicators = await api.GetIndicatorsAsync("服务器 1", "商品 中文", AsOfUtc, cancellation.Token);
         var recommendation = await api.GetRecommendationAsync("服务器 1", "商品 中文", AsOfUtc, cancellation.Token);
+        var serverProfile = await api.GetServerMarketProfileAsync("服务器 1", AsOfUtc, cancellation.Token);
         var events = await api.GetEventsAsync(
             "服务器 1",
             "商品 中文",
@@ -71,11 +73,12 @@ public sealed class ClientApiTests
         Assert.Equal("服务器 1", series.ServerId);
         Assert.Equal("服务器 1", indicators.ServerId);
         Assert.Equal("服务器 1", recommendation.ServerId);
+        Assert.Equal("服务器 1", serverProfile.ServerId);
         Assert.Single(events);
         Assert.Equal("活动 1", impact.Event.Id);
         Assert.Equal("event-pattern-summary-v1", patternSummary.StatisticsVersion);
         Assert.Equal("cross-server-event-standardization-v1", crossServerSummary.StatisticsVersion);
-        Assert.Equal(8, handler.Requests.Count);
+        Assert.Equal(9, handler.Requests.Count);
         Assert.All(handler.CancellationTokens, token => Assert.True(token.CanBeCanceled));
 
         var seriesRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/series", StringComparison.Ordinal));
@@ -86,6 +89,10 @@ public sealed class ClientApiTests
 
         var recommendationRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/recommendation", StringComparison.Ordinal));
         Assert.Contains("asOfUtc=2025-01-02T03%3A04%3A05.0000000Z", recommendationRequest.Query, StringComparison.OrdinalIgnoreCase);
+
+        var profileRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/market-profile", StringComparison.Ordinal));
+        Assert.DoesNotContain("服务器", profileRequest.AbsolutePath);
+        Assert.Contains("asOfUtc=2025-01-02T03%3A04%3A05.0000000Z", profileRequest.Query, StringComparison.OrdinalIgnoreCase);
 
         var eventsRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/events", StringComparison.Ordinal));
         Assert.Contains("fromUtc=2024-12-03T03%3A04%3A05.0000000Z", eventsRequest.Query, StringComparison.OrdinalIgnoreCase);
@@ -146,6 +153,9 @@ public sealed class ClientApiTests
             "商品 中文",
             MarketEventType.SupplyChange,
             new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.FromHours(8)));
+        var serverProfile = MarketApiUris.ServerMarketProfile(
+            "服务器 1",
+            new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.FromHours(8)));
 
         Assert.DoesNotContain(" ", events.OriginalString);
         Assert.DoesNotContain("服务器", events.OriginalString);
@@ -163,6 +173,9 @@ public sealed class ClientApiTests
         Assert.Contains("/cross-server-summary", crossServer.OriginalString, StringComparison.Ordinal);
         Assert.Contains("type=SupplyChange", crossServer.OriginalString, StringComparison.Ordinal);
         Assert.Contains("maxServers=20", crossServer.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("/api/v1/servers/", serverProfile.OriginalString, StringComparison.Ordinal);
+        Assert.DoesNotContain("服务器", serverProfile.OriginalString);
+        Assert.Contains("asOfUtc=2025-01-01T19%3A04%3A05.0000000Z", serverProfile.OriginalString, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -272,7 +285,8 @@ public sealed class ClientApiTests
         IReadOnlyList<MarketEventDto> events,
         EventImpactResponse eventImpact,
         EventPatternSummaryResponse patternSummary,
-        CrossServerEventStandardizationResponse crossServerSummary) : HttpMessageHandler
+        CrossServerEventStandardizationResponse crossServerSummary,
+        ServerMarketProfileResponse serverProfile) : HttpMessageHandler
     {
         public List<Uri> Requests { get; } = [];
         public List<CancellationToken> CancellationTokens { get; } = [];
@@ -291,6 +305,8 @@ public sealed class ClientApiTests
                         ? indicators
                         : path.EndsWith("/recommendation", StringComparison.Ordinal)
                             ? recommendation
+                            : path.EndsWith("/market-profile", StringComparison.Ordinal)
+                                ? serverProfile
                             : path.EndsWith("/events", StringComparison.Ordinal)
                                 ? events
                             : path.EndsWith("/events/summary", StringComparison.Ordinal)
@@ -330,7 +346,7 @@ public sealed class FirstScreenViewModelTests
     private static readonly DateTimeOffset LastSuccessUtc = new(2025, 1, 2, 4, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task RefreshLoadsFourEndpointsAndExposesResearchGuardrails()
+    public async Task RefreshLoadsMarketResearchEndpointsAndExposesGuardrails()
     {
         var api = new FakeMarketApi();
         var viewModel = CreateViewModel(api);
@@ -342,6 +358,7 @@ public sealed class FirstScreenViewModelTests
         Assert.Equal(1, api.SeriesCalls);
         Assert.Equal(1, api.IndicatorsCalls);
         Assert.Equal(1, api.RecommendationCalls);
+        Assert.Equal(1, api.ServerMarketProfileCalls);
         Assert.NotNull(viewModel.Snapshot);
         Assert.Equal(LastSuccessUtc, viewModel.LastSuccessfulAtUtc);
         Assert.False(viewModel.IsStale);
@@ -534,6 +551,7 @@ public sealed class FirstScreenViewModelTests
         Assert.Equal(1, api.SeriesCalls);
         Assert.Equal(1, api.IndicatorsCalls);
         Assert.Equal(1, api.RecommendationCalls);
+        Assert.Equal(1, api.ServerMarketProfileCalls);
         Assert.Null(api.SeriesRequests.Single().FromUtc);
         Assert.Null(api.SeriesRequests.Single().ToUtc);
         Assert.NotNull(viewModel.Snapshot);
@@ -692,6 +710,7 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public Exception? EventImpactFailure { get; set; }
     public Exception? EventPatternSummaryFailure { get; set; }
     public Exception? CrossServerSummaryFailure { get; set; }
+    public Exception? ServerMarketProfileFailure { get; set; }
     public CatalogResponse? Catalog { get; set; }
     public MarketSeriesResponse? Series { get; set; }
     public RecommendationPreviewResponse? Preview { get; set; }
@@ -699,6 +718,7 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public EventImpactResponse? EventImpact { get; set; }
     public EventPatternSummaryResponse? PatternSummary { get; set; }
     public CrossServerEventStandardizationResponse? CrossServerSummary { get; set; }
+    public ServerMarketProfileResponse? ServerMarketProfile { get; set; }
     public decimal DataAgeHours { get; set; } = 12.5m;
     public decimal? RobustMedian7Days { get; set; } = 100m;
     public decimal? Return7Days { get; set; } = 0.05m;
@@ -717,7 +737,8 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public int EventImpactCalls { get; private set; }
     public int EventPatternSummaryCalls { get; private set; }
     public int CrossServerSummaryCalls { get; private set; }
-    public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls + EventsCalls + EventImpactCalls + EventPatternSummaryCalls + CrossServerSummaryCalls;
+    public int ServerMarketProfileCalls { get; private set; }
+    public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls + EventsCalls + EventImpactCalls + EventPatternSummaryCalls + CrossServerSummaryCalls + ServerMarketProfileCalls;
     public List<(string ServerId, string ItemId, DateTimeOffset? FromUtc, DateTimeOffset? ToUtc)> SeriesRequests { get; } = [];
     public List<(string ServerId, string ItemId, DateTimeOffset FromUtc, DateTimeOffset ToUtc, MarketEventType? Type)> EventRequests { get; } = [];
     public TaskCompletionSource<bool> CatalogStarted { get; } = NewCompletionSource<bool>();
@@ -794,6 +815,17 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
 
             return request.Task;
         }
+    }
+
+    public Task<ServerMarketProfileResponse> GetServerMarketProfileAsync(
+        string serverId,
+        DateTimeOffset asOfUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ServerMarketProfileCalls++;
+        return ServerMarketProfileFailure is null
+            ? Task.FromResult(ServerMarketProfile ?? CreateServerMarketProfile(serverId, asOfUtc))
+            : Task.FromException<ServerMarketProfileResponse>(ServerMarketProfileFailure);
     }
 
     public Task<IReadOnlyList<MarketEventDto>> GetEventsAsync(
@@ -1124,6 +1156,47 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
             metric,
             metric,
             metric);
+    }
+
+    public static ServerMarketProfileResponse CreateServerMarketProfile(
+        string serverId,
+        DateTimeOffset asOfUtc,
+        decimal activityScore = 72m,
+        decimal demandScore = 58m)
+    {
+        static ServerProxyLevel Level(decimal score)
+            => score < 40m ? ServerProxyLevel.Low : score < 70m ? ServerProxyLevel.Medium : ServerProxyLevel.High;
+
+        var activity = new ServerProxyMetric(
+            ServerProxyAvailability.Available,
+            activityScore,
+            Level(activityScore),
+            0.8m,
+            100,
+            12,
+            80,
+            4m,
+            [new ServerProxyEvidence("visible-quantity-change-rate", 0.6m, "ratio")],
+            null);
+        var demand = new ServerProxyMetric(
+            ServerProxyAvailability.Available,
+            demandScore,
+            Level(demandScore),
+            0.7m,
+            30,
+            3,
+            20,
+            4m,
+            [new ServerProxyEvidence("visible-quantity-decline-rate", 0.45m, "ratio")],
+            null);
+        return new ServerMarketProfileResponse(
+            serverId,
+            asOfUtc.ToUniversalTime(),
+            ServerMarketProfileAnalyzer.WindowDays,
+            ServerMarketProfileAnalyzer.StatisticsVersion,
+            activity,
+            demand,
+            ServerMarketProfileAnalyzer.ScopeNotice);
     }
 
     private static EventImpactPhaseResult CreateEventPhase(

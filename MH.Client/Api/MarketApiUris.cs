@@ -39,6 +39,11 @@ public static class MarketApiUris
             $"/api/v1/markets/{Segment(serverId)}/{Segment(itemId)}/recommendation",
             [Query("asOfUtc", FormatUtc(asOfUtc))]);
 
+    public static Uri ServerMarketProfile(string serverId, DateTimeOffset asOfUtc)
+        => Build(
+            $"/api/v1/servers/{Segment(serverId)}/market-profile",
+            [Query("asOfUtc", FormatUtc(asOfUtc))]);
+
     public static Uri Events(
         string serverId,
         string itemId,

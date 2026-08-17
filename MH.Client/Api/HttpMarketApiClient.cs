@@ -35,6 +35,12 @@ public sealed class HttpMarketApiClient(HttpClient httpClient) : IReadOnlyMarket
         CancellationToken cancellationToken = default)
         => GetAsync<RecommendationPreviewResponse>(MarketApiUris.Recommendation(serverId, itemId, asOfUtc), cancellationToken);
 
+    public Task<ServerMarketProfileResponse> GetServerMarketProfileAsync(
+        string serverId,
+        DateTimeOffset asOfUtc,
+        CancellationToken cancellationToken = default)
+        => GetAsync<ServerMarketProfileResponse>(MarketApiUris.ServerMarketProfile(serverId, asOfUtc), cancellationToken);
+
     public async Task<IReadOnlyList<MarketEventDto>> GetEventsAsync(
         string serverId,
         string itemId,

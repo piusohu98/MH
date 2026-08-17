@@ -22,4 +22,6 @@ public sealed record MarketScreenSnapshot(
     EventPatternSummaryResponse? EventPatternSummary,
     string? EventPatternSummaryError,
     CrossServerEventStandardizationResponse? CrossServerEventSummary,
-    string? CrossServerEventSummaryError);
+    string? CrossServerEventSummaryError,
+    ServerMarketProfileResponse? ServerMarketProfile,
+    string? ServerMarketProfileError);

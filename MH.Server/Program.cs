@@ -139,6 +139,48 @@ app.MapGet("/api/v1/catalog", async (string? kind, MarketDbContext db, Cancellat
     return Results.Ok(new CatalogResponse(catalogKind, servers, items));
 });
 
+app.MapGet("/api/v1/servers/{serverId}/market-profile", async (
+    string serverId,
+    string? asOfUtc,
+    MarketDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    if (!TryParseRequiredUtc(asOfUtc, out var cutoffUtc))
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid server market profile parameters",
+            detail: "asOfUtc is required and must include a UTC offset.");
+    }
+
+    var server = await db.Servers.AsNoTracking()
+        .SingleOrDefaultAsync(item => item.Id == serverId, cancellationToken);
+    if (server is null)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Server not found",
+            detail: serverId);
+    }
+
+    var catalogItemCount = await db.Items.AsNoTracking()
+        .CountAsync(item => item.CatalogKind == server.CatalogKind, cancellationToken);
+    var historyStartUtc = cutoffUtc.AddDays(-ServerMarketProfileAnalyzer.WindowDays);
+    var observations = await db.ListingObservations.AsNoTracking()
+        .Where(item => item.ServerId == serverId
+            && item.ObservedAtUtc >= historyStartUtc
+            && item.ObservedAtUtc <= cutoffUtc)
+        .OrderBy(item => item.ObservedAtUtc)
+        .ThenBy(item => item.ItemId)
+        .ToListAsync(cancellationToken);
+
+    return Results.Ok(ServerMarketProfileAnalyzer.Analyze(
+        serverId,
+        observations,
+        catalogItemCount,
+        cutoffUtc));
+});
+
 app.MapGet("/api/v1/markets/{serverId}/{itemId}/events", async (
     string serverId,
     string itemId,

@@ -29,6 +29,11 @@ public interface IReadOnlyMarketApiClient
         DateTimeOffset asOfUtc,
         CancellationToken cancellationToken = default);
 
+    Task<ServerMarketProfileResponse> GetServerMarketProfileAsync(
+        string serverId,
+        DateTimeOffset asOfUtc,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<MarketEventDto>> GetEventsAsync(
         string serverId,
         string itemId,
