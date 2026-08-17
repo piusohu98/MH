@@ -49,6 +49,7 @@
 - 阶段 3.1 已接入 `CatalogCandidateMatcher` 和可选 manifest `catalog`：唯一精确名称匹配可接受，包含匹配、多候选、低置信度、无匹配和非法/空目录均显式复核或拒绝；未提供目录的旧 manifest 仍按原候选提示回放。
 - 阶段 4 离线闭环首片已增加 `.offline-replay-checkpoint.json`：每帧完成后原子写入，checkpoint 绑定 manifest SHA-256 和连续确定性帧前缀；取消后只恢复剩余帧，manifest 变化或 sidecar 损坏时从头回放，完整成功后清理。
 - Collector 已增加 `Reading/Recognizing/ReviewRequired/Completed/Failed` 进度事件和窗口取消入口；回放期间禁用目录切换/重复启动，状态栏显示当前帧，结束时明确需要人工复核的数量且不自动确认。
+- `CollectorRunStateMachine` 已固定 `Idle/Observing/Capturing/Recognizing/ReviewRequired`、五类人工停止状态和 `Stopped` 的转移规则。非法/未知事件 fail-closed，`Stopped` 不能直接恢复；这只是状态契约，当前没有真实页面分类器或窗口捕获器。
 
 ## 2. 已验证结果
 
@@ -157,6 +158,21 @@ dotnet build MH.slnx -c Release --no-restore
 
 提交 `1f862e2` 新增读取/逐帧识别/需复核/完成/失败事件顺序测试，以及 Collector 的取消按钮和人工复核数量提示。取消继续通过原 token 透传，并复用 checkpoint 恢复能力。
 
+2026-08-17 Collector 安全停止状态契约复验：
+
+```text
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~CollectorRunStateMachineTests
+结果：22 passed，0 failed，0 skipped
+
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore
+结果：291 passed，0 failed，0 skipped
+
+dotnet build MH.slnx -c Release --no-restore
+结果：5/5 项目成功，0 warning，0 error
+```
+
+提交 `f4978aa` 固定正常识别、人工复核、登录/更新/验证码/掉线/未知页面停止、显式停止/重置和非法事件语义；提交 `f025cb7` 阻止旧回放或已取消回放的排队 progress 回调覆盖当前 UI。离线错误仍保持离线错误，未映射成任何真实页面状态。
+
 客户端节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。
 
 活动事件研究节点同样由 Luna/max 完成初版；主任务审查发现并修复了缺省 `windowDays` 未按约定使用 7、价格与在售数量基线被错误绑定，以及未来观察测试落在事件总窗口之外三个缺口。修复后由主任务独立重跑 Release 构建、全量测试和真实 HTTP 冒烟，结果如上。
@@ -208,7 +224,7 @@ daf218a feat(client): focus dashboard on game market players
 - 可见供给只作为代理指标，尚未进入回测成交容量约束。
 - 建议预览已接入只读 Server API 和 WPF 第一屏，但尚无建议持久化；当前仍是研究预览，不代表真实资金建议。
 - 跨区事件标准化已完成最小闭环：`cross-server-event-standardization-v1` 先在每个区按活动前稳健中位价计算相对变化，再以区服级中位数等权汇总跨区中位数、P25/P75、方向计数和一致度；价格与在售数量独立处理，少于 2 个可比较区服返回样本不足。当前 DEMO 只有 1 个区服，未伪造第二个区服或真实跨区结论。
-- Client 第一屏仍需人工检查 DPI、字体和长文本布局；Collector 已完成离线 OCR 边界和目录匹配，但尚无真实中文 OCR、热键、悬浮查价或采集状态机。
+- Client 第一屏仍需人工检查 DPI、字体和长文本布局；Collector 已完成离线 OCR 边界、目录匹配和采集状态转移契约，但尚无真实中文 OCR、热键、悬浮查价或真实页面检测。
 - 尚无真实截图、OCR 模型、商品别名字典和标注集，不能评估真实识别率。
 - 尚未实现自包含 Windows 发布和 CI。
 - 区服人数和高消费玩家只能做代理指数，尚无校准数据，不能输出具体人数。

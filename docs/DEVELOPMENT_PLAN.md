@@ -20,7 +20,7 @@
 | `MH.Core` | 领域模型、DTO、确定性模拟器、日线聚合、上传指纹 | 指标、异常过滤、建议、回测 |
 | `MH.Server` | SQLite、种子数据、目录/走势/上传/健康 API、事件研究、跨事件归纳、跨区标准化和区服代理指标 | 配合 OCR/采集数据闭环 |
 | `MH.Client` | 只读 API 客户端、WPF 单商品走势/建议、活动观察、跨事件/跨区比较和区服代理指标 | OCR 调试和悬浮查价 |
-| `MH.Collector` | 本地 manifest/图片目录回放、OCR 契约、确定性 Fake、可选商品目录匹配、checkpoint、逐帧进度、取消和复核提醒 | 中文 OCR、页面停止状态和端到端写入 |
+| `MH.Collector` | 本地 manifest/图片目录回放、OCR 契约、确定性 Fake、可选商品目录匹配、checkpoint、逐帧进度、取消、复核提醒和停止状态转移契约 | 中文 OCR、真实页面检测和端到端写入 |
 | `MH.Tests` | Core 与 API 集成测试 | 分析、OCR、状态机和端到端测试 |
 
 ## 3. 数据流
@@ -95,6 +95,8 @@ WPF 启动时先加载 DEMO 目录，再通过首个商品的完整日线末点�
 计划状态：`Idle`、`Observing`、`Capturing`、`Recognizing`、`ReviewRequired`、`PausedForLogin`、`PausedForUpdate`、`PausedForCaptcha`、`Disconnected`、`UnknownPage`、`Stopped`。
 
 只有白名单页面且置信度达到门槛时才能从观察进入截图/识别。登录、更新、验证码、掉线和未知页面不能触发自动点击；只能保存诊断信息、停止操作并通知人工。
+
+当前 `CollectorRunStateMachine` 已固定正常 `Idle -> Observing -> Capturing -> Recognizing` 路径、人工复核路径和五类停止状态。非法/未知事件保持原状态；`Stopped` 只能显式 `Reset -> Idle -> StartObserving`。该契约尚未连接真实页面分类器或窗口捕获器，离线 manifest、缺图、OCR 错误和低置信度不能被解释为登录、更新、验证码、掉线或未知页面。
 
 ## 8. 测试与交付门禁
 
