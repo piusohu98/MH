@@ -18,8 +18,8 @@
 | 项目 | 当前职责 | 后续职责 |
 | --- | --- | --- |
 | `MH.Core` | 领域模型、DTO、确定性模拟器、日线聚合、上传指纹 | 指标、异常过滤、建议、回测 |
-| `MH.Server` | SQLite、种子数据、目录/走势/上传/健康 API、事件查询、单商品事件影响研究和跨事件历史归纳 | 事件日历、跨区事件标准化、仓位数据 |
-| `MH.Client` | 只读 API 客户端、WPF 单商品走势/指标/建议第一屏、活动观察卡、走势图事件标记和相似活动记录 | 建议榜、区服指标和仓位 |
+| `MH.Server` | SQLite、种子数据、目录/走势/上传/健康 API、事件查询、单商品事件影响研究、跨事件归纳和跨区标准化 | 事件日历、仓位数据 |
+| `MH.Client` | 只读 API 客户端、WPF 单商品走势/指标/建议第一屏、活动观察卡、走势图事件标记、跨事件归纳和跨区比较 | 建议榜、区服指标和仓位 |
 | `MH.Collector` | 可编译 WPF 壳 | 截图/OCR、状态机、回放和通知 |
 | `MH.Tests` | Core 与 API 集成测试 | 分析、OCR、状态机和端到端测试 |
 
@@ -69,6 +69,8 @@ flowchart LR
 WPF 活动观察接入固定查询 `[asOfUtc-30天, asOfUtc+30天)`，客户端只保留 `Holiday`/`SupplyChange`，并按进行中、最近结束、最近开始的优先级选择一个重点活动，只请求一次默认窗口影响结果；`DayNight`/`OcrAnomaly` 不进入玩家日历或走势图。活动 API 独立失败时保留主行情状态；仅当上一份快照属于同一 `server/item` 时才保留同市场上一份活动数据，否则活动数据置空并显示“活动资料暂时不可用”。单个活动阶段少于 3 个有效日线时显示样本不足，不推导必涨必跌或买卖结论。
 
 跨事件归纳使用 `event-pattern-summary-v1`，固定同一 `server/item/eventType`，只统计已结束且不晚于 `asOfUtc` 的历史活动；价格和在售数量分别按活动中/活动后计算中位变化、上涨/下跌/基本不变计数和方向一致度。历史范围、事件数量和窗口均有上限，任一维度少于 3 个可比较活动时只返回样本不足；客户端展示为“相似活动历史归纳”，不转成买卖动作。归纳 API 独立失败时不改变主行情状态，也不复用不同市场、类型或历史截点的旧结果。
+
+跨区比较使用 `cross-server-event-standardization-v1`，只接受同一商品和 `Holiday`/`SupplyChange`。每个区先用活动前稳健中位价计算活动中/后相对变化，再取该区多个历史活动的中位数；最终对区服级中位数等权计算跨区中位数、P25、P75、方向计数和一致度，避免活动较多的区服支配结果。价格与在售数量独立处理，至少 2 个可比较区服才标记 `Available`。查询固定 `historyDays`、`windowDays`、`maxServers` 和 `maxEventsPerServer` 上限，只读取 `EndsAtUtc <= asOfUtc` 的活动和 `EndUtc <= asOfUtc` 的日线；客户端失败或样本不足时只显示安全提示，不复用不同商品、类型或历史截点的旧结果。DEMO 当前只有 1 个区服，不伪造跨区数据。
 
 事件 API 为 `GET /api/v1/markets/{serverId}/{itemId}/events?fromUtc=...&toUtc=...&type=...` 和 `GET /api/v1/markets/{serverId}/{itemId}/events/{eventId}/impact?asOfUtc=...&windowDays=...`。事件列表要求带 offset 的 UTC 时间、范围不超过 366 天，按半开区间重叠过滤并按开始时间/事件 ID 排序；影响查询只读取三阶段所需的有界观察区间，并在数据库条件中截断 `ObservedAtUtc <= asOfUtc`。这些接口只输出研究事实，不输出盈利或买卖结论。
 

@@ -70,6 +70,19 @@ public sealed class HttpMarketApiClient(HttpClient httpClient) : IReadOnlyMarket
             MarketApiUris.EventPatternSummary(serverId, itemId, eventType, asOfUtc, windowDays, historyDays, maxEvents),
             cancellationToken);
 
+    public Task<CrossServerEventStandardizationResponse> GetCrossServerEventSummaryAsync(
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int windowDays = CrossServerEventStandardizationAnalyzer.DefaultWindowDays,
+        int historyDays = CrossServerEventStandardizationAnalyzer.DefaultHistoryDays,
+        int maxServers = CrossServerEventStandardizationAnalyzer.DefaultMaxServers,
+        int maxEventsPerServer = CrossServerEventStandardizationAnalyzer.DefaultMaxEventsPerServer,
+        CancellationToken cancellationToken = default)
+        => GetAsync<CrossServerEventStandardizationResponse>(
+            MarketApiUris.CrossServerEventSummary(itemId, eventType, asOfUtc, windowDays, historyDays, maxServers, maxEventsPerServer),
+            cancellationToken);
+
     private async Task<TResponse> GetAsync<TResponse>(Uri requestUri, CancellationToken cancellationToken)
         where TResponse : class
     {

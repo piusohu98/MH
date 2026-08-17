@@ -54,4 +54,14 @@ public interface IReadOnlyMarketApiClient
         int historyDays = EventPatternSummaryAnalyzer.DefaultHistoryDays,
         int maxEvents = EventPatternSummaryAnalyzer.DefaultMaxEvents,
         CancellationToken cancellationToken = default);
+
+    Task<CrossServerEventStandardizationResponse> GetCrossServerEventSummaryAsync(
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int windowDays = CrossServerEventStandardizationAnalyzer.DefaultWindowDays,
+        int historyDays = CrossServerEventStandardizationAnalyzer.DefaultHistoryDays,
+        int maxServers = CrossServerEventStandardizationAnalyzer.DefaultMaxServers,
+        int maxEventsPerServer = CrossServerEventStandardizationAnalyzer.DefaultMaxEventsPerServer,
+        CancellationToken cancellationToken = default);
 }

@@ -90,6 +90,25 @@ public static class MarketApiUris
                 Query("maxEvents", maxEvents.ToString(CultureInfo.InvariantCulture))
             ]);
 
+    public static Uri CrossServerEventSummary(
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int windowDays = CrossServerEventStandardizationAnalyzer.DefaultWindowDays,
+        int historyDays = CrossServerEventStandardizationAnalyzer.DefaultHistoryDays,
+        int maxServers = CrossServerEventStandardizationAnalyzer.DefaultMaxServers,
+        int maxEventsPerServer = CrossServerEventStandardizationAnalyzer.DefaultMaxEventsPerServer)
+        => Build(
+            $"/api/v1/items/{Segment(itemId)}/events/cross-server-summary",
+            [
+                Query("type", eventType.ToString()),
+                Query("asOfUtc", FormatUtc(asOfUtc)),
+                Query("windowDays", windowDays.ToString(CultureInfo.InvariantCulture)),
+                Query("historyDays", historyDays.ToString(CultureInfo.InvariantCulture)),
+                Query("maxServers", maxServers.ToString(CultureInfo.InvariantCulture)),
+                Query("maxEventsPerServer", maxEventsPerServer.ToString(CultureInfo.InvariantCulture))
+            ]);
+
     private static string Segment(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);

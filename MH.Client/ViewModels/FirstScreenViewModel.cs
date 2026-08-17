@@ -286,6 +286,11 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
 
     public string? EventPatternSummaryError => Snapshot?.EventPatternSummaryError;
 
+    public CrossServerEventStandardizationResponse? SelectedCrossServerEventSummary
+        => Snapshot?.CrossServerEventSummary;
+
+    public string? CrossServerEventSummaryError => Snapshot?.CrossServerEventSummaryError;
+
     public bool CanInitialize => State != MarketViewState.Loading;
 
     public bool CanRefresh => CanInitialize
@@ -627,6 +632,31 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
     public string EventPatternSummaryErrorText
         => EventPatternSummaryError ?? string.Empty;
 
+    public string CrossServerEventSummaryText
+    {
+        get
+        {
+            var summary = SelectedCrossServerEventSummary;
+            if (summary is null)
+            {
+                return CrossServerEventSummaryError is null ? "暂无跨区比较样本。" : "跨区比较暂不可用。";
+            }
+
+            return string.Join(
+                Environment.NewLine,
+                $"跨区比较（{GetEventTypeText(summary.EventType)}）",
+                $"跨区样本 {summary.SampleServerCount} 个 · 统计版本 {summary.StatisticsVersion}",
+                FormatCrossServerMetric("活动中价格", summary.DuringPrice),
+                FormatCrossServerMetric("活动后价格", summary.AfterPrice),
+                FormatCrossServerMetric("活动中在售数量", summary.DuringVisibleSupply),
+                FormatCrossServerMetric("活动后在售数量", summary.AfterVisibleSupply),
+                $"标准化方式：每个区先按活动中位变化，再对各区结果等权汇总；仅表示历史样本，不是买卖建议。");
+        }
+    }
+
+    public string CrossServerEventSummaryErrorText
+        => CrossServerEventSummaryError ?? string.Empty;
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         if (cancellationToken.IsCancellationRequested)
@@ -895,7 +925,9 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
             eventData.Impact,
             eventData.Error,
             eventData.PatternSummary,
-            eventData.PatternSummaryError);
+            eventData.PatternSummaryError,
+            eventData.CrossServerSummary,
+            eventData.CrossServerSummaryError);
         LastSuccessfulAtUtc = utcNow().ToUniversalTime();
         IsStale = indicators.DataAgeHours is > RecommendationRule.MaxDataAgeHours;
         ErrorMessage = null;
@@ -1037,7 +1069,58 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
             }
         }
 
-        return new EventLoadResult(relevantEvents, impact, eventError, patternSummary, patternSummaryError);
+        CrossServerEventStandardizationResponse? crossServerSummary = null;
+        string? crossServerSummaryError = null;
+        if (focusEvent is not null)
+        {
+            try
+            {
+                crossServerSummary = await apiClient.GetCrossServerEventSummaryAsync(
+                    itemId,
+                    focusEvent.Type,
+                    asOfUtc,
+                    CrossServerEventStandardizationAnalyzer.DefaultWindowDays,
+                    CrossServerEventStandardizationAnalyzer.DefaultHistoryDays,
+                    CrossServerEventStandardizationAnalyzer.DefaultMaxServers,
+                    CrossServerEventStandardizationAnalyzer.DefaultMaxEventsPerServer,
+                    cancellationToken);
+                if (crossServerSummary is null
+                    || !string.Equals(crossServerSummary.ItemId, itemId, StringComparison.Ordinal)
+                    || crossServerSummary.EventType != focusEvent.Type
+                    || crossServerSummary.AsOfUtc.ToUniversalTime() != asOfUtc.ToUniversalTime())
+                {
+                    throw new InvalidOperationException("市场服务返回了不匹配的跨区活动结果。");
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsOptionalEventFailure(exception, cancellationToken))
+            {
+                if (previousSnapshot is { } prior
+                    && string.Equals(prior.Series.ItemId, itemId, StringComparison.Ordinal)
+                    && prior.CrossServerEventSummary?.EventType == focusEvent.Type
+                    && prior.CrossServerEventSummary.AsOfUtc.ToUniversalTime() == asOfUtc.ToUniversalTime())
+                {
+                    crossServerSummary = prior.CrossServerEventSummary;
+                    crossServerSummaryError = "跨区比较暂时不可用，显示上次同类活动结果。";
+                }
+                else
+                {
+                    crossServerSummaryError = "跨区比较暂时不可用。";
+                }
+            }
+        }
+
+        return new EventLoadResult(
+            relevantEvents,
+            impact,
+            eventError,
+            patternSummary,
+            patternSummaryError,
+            crossServerSummary,
+            crossServerSummaryError);
     }
 
     public static IReadOnlyList<MarketEventDto> FilterRelevantEvents(IEnumerable<MarketEventDto> events)
@@ -1167,6 +1250,8 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EventResearchError));
         OnPropertyChanged(nameof(SelectedEventPatternSummary));
         OnPropertyChanged(nameof(EventPatternSummaryError));
+        OnPropertyChanged(nameof(SelectedCrossServerEventSummary));
+        OnPropertyChanged(nameof(CrossServerEventSummaryError));
         OnPropertyChanged(nameof(EventCalendarText));
         OnPropertyChanged(nameof(FocusEventTitleText));
         OnPropertyChanged(nameof(FocusEventPeriodText));
@@ -1180,6 +1265,8 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(EventResearchErrorText));
         OnPropertyChanged(nameof(EventPatternSummaryText));
         OnPropertyChanged(nameof(EventPatternSummaryErrorText));
+        OnPropertyChanged(nameof(CrossServerEventSummaryText));
+        OnPropertyChanged(nameof(CrossServerEventSummaryErrorText));
         OnPropertyChanged(nameof(CanInitialize));
         OnPropertyChanged(nameof(CanRefresh));
     }
@@ -1252,6 +1339,18 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
             ? FormatSignedPercent(metric.MedianChange.Value)
             : "—";
         return $"{label}：中位变化 {median} · 上涨 {metric.IncreaseCount} · 下跌 {metric.DecreaseCount} · 基本不变 {metric.StableCount} · 方向一致度 {FormatPercent(metric.DirectionConsistency)}";
+    }
+
+    private static string FormatCrossServerMetric(
+        string label,
+        CrossServerEventMetricSummary metric)
+    {
+        if (!metric.Available)
+        {
+            return $"{label}：跨区样本不足（可比较 {metric.ComparableServerCount} 个区服，需要至少 2 个）";
+        }
+
+        return $"{label}：中位变化 {FormatSignedPercent(metric.MedianChange!.Value)} · 区服范围 {FormatSignedPercent(metric.P25Change!.Value)} ~ {FormatSignedPercent(metric.P75Change!.Value)} · 上涨 {metric.IncreaseCount} · 下跌 {metric.DecreaseCount} · 基本不变 {metric.StableCount} · 一致度 {FormatPercent(metric.DirectionConsistency)}";
     }
 
     private static string GetComparisonReasonText(string? reason)
@@ -1367,5 +1466,7 @@ public sealed class FirstScreenViewModel : INotifyPropertyChanged
         EventImpactResponse? Impact,
         string? Error,
         EventPatternSummaryResponse? PatternSummary,
-        string? PatternSummaryError);
+        string? PatternSummaryError,
+        CrossServerEventStandardizationResponse? CrossServerSummary,
+        string? CrossServerSummaryError);
 }

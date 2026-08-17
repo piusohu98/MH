@@ -367,6 +367,128 @@ app.MapGet("/api/v1/markets/{serverId}/{itemId}/events/{eventId}/impact", async 
         analysis.After));
 });
 
+app.MapGet("/api/v1/items/{itemId}/events/cross-server-summary", async (
+    string itemId,
+    string? type,
+    string? asOfUtc,
+    string? windowDays,
+    string? historyDays,
+    string? maxServers,
+    string? maxEventsPerServer,
+    MarketDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var requestedWindowDays = CrossServerEventStandardizationAnalyzer.DefaultWindowDays;
+    var requestedHistoryDays = CrossServerEventStandardizationAnalyzer.DefaultHistoryDays;
+    var requestedMaxServers = CrossServerEventStandardizationAnalyzer.DefaultMaxServers;
+    var requestedMaxEventsPerServer = CrossServerEventStandardizationAnalyzer.DefaultMaxEventsPerServer;
+    var validType = TryParseMarketEventType(type, out var eventType)
+        && eventType is MarketEventType.Holiday or MarketEventType.SupplyChange;
+    if (!validType
+        || !TryParseRequiredUtc(asOfUtc, out var cutoffUtc)
+        || (!string.IsNullOrWhiteSpace(windowDays)
+            && (!int.TryParse(windowDays, NumberStyles.Integer, CultureInfo.InvariantCulture, out requestedWindowDays)
+                || requestedWindowDays is < CrossServerEventStandardizationAnalyzer.MinimumWindowDays or > CrossServerEventStandardizationAnalyzer.MaximumWindowDays))
+        || (!string.IsNullOrWhiteSpace(historyDays)
+            && (!int.TryParse(historyDays, NumberStyles.Integer, CultureInfo.InvariantCulture, out requestedHistoryDays)
+                || requestedHistoryDays is < CrossServerEventStandardizationAnalyzer.MinimumHistoryDays or > CrossServerEventStandardizationAnalyzer.MaximumHistoryDays))
+        || (!string.IsNullOrWhiteSpace(maxServers)
+            && (!int.TryParse(maxServers, NumberStyles.Integer, CultureInfo.InvariantCulture, out requestedMaxServers)
+                || requestedMaxServers is < CrossServerEventStandardizationAnalyzer.MinimumMaxServers or > CrossServerEventStandardizationAnalyzer.MaximumMaxServers))
+        || (!string.IsNullOrWhiteSpace(maxEventsPerServer)
+            && (!int.TryParse(maxEventsPerServer, NumberStyles.Integer, CultureInfo.InvariantCulture, out requestedMaxEventsPerServer)
+                || requestedMaxEventsPerServer is < CrossServerEventStandardizationAnalyzer.MinimumMaxEventsPerServer or > CrossServerEventStandardizationAnalyzer.MaximumMaxEventsPerServer)))
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid cross-server event parameters",
+            detail: $"type must be Holiday or SupplyChange; asOfUtc is required with an offset; windowDays must be between {CrossServerEventStandardizationAnalyzer.MinimumWindowDays} and {CrossServerEventStandardizationAnalyzer.MaximumWindowDays}; historyDays must be between {CrossServerEventStandardizationAnalyzer.MinimumHistoryDays} and {CrossServerEventStandardizationAnalyzer.MaximumHistoryDays}; maxServers must be between {CrossServerEventStandardizationAnalyzer.MinimumMaxServers} and {CrossServerEventStandardizationAnalyzer.MaximumMaxServers}; maxEventsPerServer must be between {CrossServerEventStandardizationAnalyzer.MinimumMaxEventsPerServer} and {CrossServerEventStandardizationAnalyzer.MaximumMaxEventsPerServer}.");
+    }
+
+    var catalogKind = await db.Items.AsNoTracking()
+        .Where(x => x.Id == itemId)
+        .Select(x => (CatalogKind?)x.CatalogKind)
+        .SingleOrDefaultAsync(cancellationToken);
+    if (!catalogKind.HasValue)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status404NotFound,
+            title: "Item not found",
+            detail: "itemId does not exist in a queryable catalog.");
+    }
+
+    var historyStartUtc = cutoffUtc.AddDays(-requestedHistoryDays);
+    var eligibleServerIds = db.Events.AsNoTracking()
+        .Where(x => x.CatalogKind == catalogKind.Value
+            && x.Type == eventType!.Value
+            && (x.ItemId == null || x.ItemId == itemId)
+            && x.StartsAtUtc >= historyStartUtc
+            && x.EndsAtUtc > x.StartsAtUtc
+            && x.EndsAtUtc <= cutoffUtc)
+        .Select(x => x.ServerId);
+    var servers = await db.Servers.AsNoTracking()
+        .Where(x => x.CatalogKind == catalogKind.Value
+            && eligibleServerIds.Contains(x.Id))
+        .OrderBy(x => x.Id)
+        .Take(requestedMaxServers)
+        .Select(x => x.Id)
+        .ToListAsync(cancellationToken);
+    List<Event> marketEvents;
+    if (servers.Count == 0)
+    {
+        marketEvents = [];
+    }
+    else
+    {
+        marketEvents = await db.Events.AsNoTracking()
+            .Where(x => servers.Contains(x.ServerId)
+                && x.CatalogKind == catalogKind.Value
+                && x.Type == eventType!.Value
+                && (x.ItemId == null || x.ItemId == itemId)
+                && x.StartsAtUtc >= historyStartUtc
+                && x.EndsAtUtc > x.StartsAtUtc
+                && x.EndsAtUtc <= cutoffUtc)
+            .OrderBy(x => x.ServerId)
+            .ThenByDescending(x => x.EndsAtUtc)
+            .ThenByDescending(x => x.StartsAtUtc)
+            .ThenBy(x => x.Id)
+            .ToListAsync(cancellationToken);
+    }
+    var observationStartUtc = historyStartUtc.AddDays(-requestedWindowDays);
+    List<ListingObservation> observations;
+    if (servers.Count == 0)
+    {
+        observations = [];
+    }
+    else
+    {
+        observations = await db.ListingObservations.AsNoTracking()
+            .Where(x => servers.Contains(x.ServerId)
+                && x.ItemId == itemId
+                && x.ObservedAtUtc >= observationStartUtc
+                && x.ObservedAtUtc <= cutoffUtc)
+            .OrderBy(x => x.ServerId)
+            .ThenBy(x => x.ObservedAtUtc)
+            .ToListAsync(cancellationToken);
+    }
+    var inputs = servers
+        .Select(serverId => new CrossServerEventInput(
+            serverId,
+            marketEvents.Where(x => x.ServerId == serverId).ToArray(),
+            PriceBarAggregator.Aggregate(observations.Where(x => x.ServerId == serverId))))
+        .ToArray();
+    var summary = CrossServerEventStandardizationAnalyzer.Analyze(
+        itemId,
+        eventType!.Value,
+        inputs,
+        cutoffUtc,
+        requestedWindowDays,
+        requestedHistoryDays,
+        requestedMaxServers,
+        requestedMaxEventsPerServer);
+    return Results.Ok(summary);
+});
+
 app.MapGet("/api/v1/markets/{serverId}/{itemId}/series", async (
     string serverId,
     string itemId,

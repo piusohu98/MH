@@ -32,7 +32,8 @@ public sealed class ClientApiTests
                 AsOfUtc.AddDays(1),
                 CatalogKind.Demo)],
             FakeMarketApi.CreateEventImpact("活动 1", AsOfUtc),
-            FakeMarketApi.CreateEventPatternSummary(MarketEventType.Holiday, AsOfUtc));
+            FakeMarketApi.CreateEventPatternSummary(MarketEventType.Holiday, AsOfUtc),
+            FakeMarketApi.CreateCrossServerSummary("商品 中文", MarketEventType.Holiday, AsOfUtc));
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://localhost/") };
         var api = new HttpMarketApiClient(httpClient);
         using var cancellation = new CancellationTokenSource();
@@ -60,6 +61,11 @@ public sealed class ClientApiTests
             MarketEventType.Holiday,
             AsOfUtc,
             cancellationToken: cancellation.Token);
+        var crossServerSummary = await api.GetCrossServerEventSummaryAsync(
+            "商品 中文",
+            MarketEventType.Holiday,
+            AsOfUtc,
+            cancellationToken: cancellation.Token);
 
         Assert.Equal(CatalogKind.Demo, catalog.CatalogKind);
         Assert.Equal("服务器 1", series.ServerId);
@@ -68,7 +74,8 @@ public sealed class ClientApiTests
         Assert.Single(events);
         Assert.Equal("活动 1", impact.Event.Id);
         Assert.Equal("event-pattern-summary-v1", patternSummary.StatisticsVersion);
-        Assert.Equal(7, handler.Requests.Count);
+        Assert.Equal("cross-server-event-standardization-v1", crossServerSummary.StatisticsVersion);
+        Assert.Equal(8, handler.Requests.Count);
         Assert.All(handler.CancellationTokens, token => Assert.True(token.CanBeCanceled));
 
         var seriesRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/series", StringComparison.Ordinal));
@@ -93,6 +100,11 @@ public sealed class ClientApiTests
         Assert.Contains("type=Holiday", summaryRequest.Query, StringComparison.Ordinal);
         Assert.Contains("historyDays=180", summaryRequest.Query, StringComparison.Ordinal);
         Assert.Contains("maxEvents=50", summaryRequest.Query, StringComparison.Ordinal);
+
+        var crossServerRequest = Assert.Single(handler.Requests, request => request.AbsolutePath.EndsWith("/cross-server-summary", StringComparison.Ordinal));
+        Assert.Contains("type=Holiday", crossServerRequest.Query, StringComparison.Ordinal);
+        Assert.Contains("maxServers=20", crossServerRequest.Query, StringComparison.Ordinal);
+        Assert.Contains("maxEventsPerServer=20", crossServerRequest.Query, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -130,6 +142,10 @@ public sealed class ClientApiTests
             "商品 中文",
             MarketEventType.Holiday,
             new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.FromHours(8)));
+        var crossServer = MarketApiUris.CrossServerEventSummary(
+            "商品 中文",
+            MarketEventType.SupplyChange,
+            new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.FromHours(8)));
 
         Assert.DoesNotContain(" ", events.OriginalString);
         Assert.DoesNotContain("服务器", events.OriginalString);
@@ -143,6 +159,10 @@ public sealed class ClientApiTests
         Assert.Contains("type=Holiday", summary.OriginalString, StringComparison.Ordinal);
         Assert.Contains("historyDays=180", summary.OriginalString, StringComparison.Ordinal);
         Assert.Contains("maxEvents=50", summary.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("/api/v1/items/", crossServer.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("/cross-server-summary", crossServer.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("type=SupplyChange", crossServer.OriginalString, StringComparison.Ordinal);
+        Assert.Contains("maxServers=20", crossServer.OriginalString, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -251,7 +271,8 @@ public sealed class ClientApiTests
         RecommendationPreviewResponse recommendation,
         IReadOnlyList<MarketEventDto> events,
         EventImpactResponse eventImpact,
-        EventPatternSummaryResponse patternSummary) : HttpMessageHandler
+        EventPatternSummaryResponse patternSummary,
+        CrossServerEventStandardizationResponse crossServerSummary) : HttpMessageHandler
     {
         public List<Uri> Requests { get; } = [];
         public List<CancellationToken> CancellationTokens { get; } = [];
@@ -272,9 +293,11 @@ public sealed class ClientApiTests
                             ? recommendation
                             : path.EndsWith("/events", StringComparison.Ordinal)
                                 ? events
-                                : path.EndsWith("/events/summary", StringComparison.Ordinal)
-                                    ? patternSummary
-                                    : path.EndsWith("/impact", StringComparison.Ordinal)
+                            : path.EndsWith("/events/summary", StringComparison.Ordinal)
+                                ? patternSummary
+                                : path.EndsWith("/cross-server-summary", StringComparison.Ordinal)
+                                    ? crossServerSummary
+                                : path.EndsWith("/impact", StringComparison.Ordinal)
                                         ? eventImpact
                                         : throw new InvalidOperationException($"Unexpected path: {path}");
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
@@ -661,17 +684,21 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     private readonly Dictionary<int, TaskCompletionSource<bool>> eventImpactWaiters = [];
     private readonly List<TaskCompletionSource<EventPatternSummaryResponse>> patternSummaryRequests = [];
     private readonly Dictionary<int, TaskCompletionSource<bool>> patternSummaryWaiters = [];
+    private readonly List<TaskCompletionSource<CrossServerEventStandardizationResponse>> crossServerSummaryRequests = [];
+    private readonly Dictionary<int, TaskCompletionSource<bool>> crossServerSummaryWaiters = [];
 
     public Exception? Failure { get; set; }
     public Exception? EventsFailure { get; set; }
     public Exception? EventImpactFailure { get; set; }
     public Exception? EventPatternSummaryFailure { get; set; }
+    public Exception? CrossServerSummaryFailure { get; set; }
     public CatalogResponse? Catalog { get; set; }
     public MarketSeriesResponse? Series { get; set; }
     public RecommendationPreviewResponse? Preview { get; set; }
     public IReadOnlyList<MarketEventDto>? Events { get; set; }
     public EventImpactResponse? EventImpact { get; set; }
     public EventPatternSummaryResponse? PatternSummary { get; set; }
+    public CrossServerEventStandardizationResponse? CrossServerSummary { get; set; }
     public decimal DataAgeHours { get; set; } = 12.5m;
     public decimal? RobustMedian7Days { get; set; } = 100m;
     public decimal? Return7Days { get; set; } = 0.05m;
@@ -681,6 +708,7 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public bool BlockRecommendation { get; set; }
     public bool BlockEventImpact { get; set; }
     public bool BlockPatternSummary { get; set; }
+    public bool BlockCrossServerSummary { get; set; }
     public int CatalogCalls { get; private set; }
     public int SeriesCalls { get; private set; }
     public int IndicatorsCalls { get; private set; }
@@ -688,7 +716,8 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
     public int EventsCalls { get; private set; }
     public int EventImpactCalls { get; private set; }
     public int EventPatternSummaryCalls { get; private set; }
-    public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls + EventsCalls + EventImpactCalls + EventPatternSummaryCalls;
+    public int CrossServerSummaryCalls { get; private set; }
+    public int TotalCalls => CatalogCalls + SeriesCalls + IndicatorsCalls + RecommendationCalls + EventsCalls + EventImpactCalls + EventPatternSummaryCalls + CrossServerSummaryCalls;
     public List<(string ServerId, string ItemId, DateTimeOffset? FromUtc, DateTimeOffset? ToUtc)> SeriesRequests { get; } = [];
     public List<(string ServerId, string ItemId, DateTimeOffset FromUtc, DateTimeOffset ToUtc, MarketEventType? Type)> EventRequests { get; } = [];
     public TaskCompletionSource<bool> CatalogStarted { get; } = NewCompletionSource<bool>();
@@ -848,6 +877,40 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
         }
     }
 
+    public Task<CrossServerEventStandardizationResponse> GetCrossServerEventSummaryAsync(
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int windowDays = CrossServerEventStandardizationAnalyzer.DefaultWindowDays,
+        int historyDays = CrossServerEventStandardizationAnalyzer.DefaultHistoryDays,
+        int maxServers = CrossServerEventStandardizationAnalyzer.DefaultMaxServers,
+        int maxEventsPerServer = CrossServerEventStandardizationAnalyzer.DefaultMaxEventsPerServer,
+        CancellationToken cancellationToken = default)
+    {
+        CrossServerSummaryCalls++;
+        if (CrossServerSummaryFailure is not null)
+        {
+            return Task.FromException<CrossServerEventStandardizationResponse>(CrossServerSummaryFailure);
+        }
+
+        if (!BlockCrossServerSummary)
+        {
+            return Task.FromResult(CrossServerSummary ?? CreateCrossServerSummary(itemId, eventType, asOfUtc));
+        }
+
+        lock (sync)
+        {
+            var request = NewCompletionSource<CrossServerEventStandardizationResponse>();
+            crossServerSummaryRequests.Add(request);
+            foreach (var waiter in crossServerSummaryWaiters.Where(pair => crossServerSummaryRequests.Count >= pair.Key).Select(pair => pair.Value))
+            {
+                waiter.TrySetResult(true);
+            }
+
+            return request.Task;
+        }
+    }
+
     public Task WaitForRecommendationCountAsync(int count)
     {
         lock (sync)
@@ -914,6 +977,29 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
         lock (sync)
         {
             patternSummaryRequests[index].TrySetResult(response);
+        }
+    }
+
+    public Task WaitForCrossServerSummaryCountAsync(int count)
+    {
+        lock (sync)
+        {
+            if (crossServerSummaryRequests.Count >= count)
+            {
+                return Task.CompletedTask;
+            }
+
+            var waiter = NewCompletionSource<bool>();
+            crossServerSummaryWaiters[count] = waiter;
+            return waiter.Task;
+        }
+    }
+
+    public void CompleteCrossServerSummary(int index, CrossServerEventStandardizationResponse response)
+    {
+        lock (sync)
+        {
+            crossServerSummaryRequests[index].TrySetResult(response);
         }
     }
 
@@ -996,6 +1082,43 @@ internal sealed class FakeMarketApi : IReadOnlyMarketApiClient
             EventPatternSummaryAnalyzer.NeutralThreshold,
             sampleEventCount,
             asOfUtc.AddDays(-EventPatternSummaryAnalyzer.DefaultHistoryDays),
+            asOfUtc,
+            metric,
+            metric,
+            metric,
+            metric);
+    }
+
+    public static CrossServerEventStandardizationResponse CreateCrossServerSummary(
+        string itemId,
+        MarketEventType eventType,
+        DateTimeOffset asOfUtc,
+        int sampleServerCount = 1)
+    {
+        var metric = new CrossServerEventMetricSummary(
+            sampleServerCount >= 2,
+            sampleServerCount,
+            sampleServerCount >= 2 ? 0.1m : null,
+            sampleServerCount >= 2 ? 0.05m : null,
+            sampleServerCount >= 2 ? 0.15m : null,
+            sampleServerCount >= 2 ? 2 : 0,
+            0,
+            sampleServerCount >= 2 ? sampleServerCount - 2 : 0,
+            sampleServerCount >= 2 ? 0.8m : null,
+            sampleServerCount >= 2 ? null : "comparable-servers<2");
+        return new CrossServerEventStandardizationResponse(
+            itemId,
+            eventType,
+            asOfUtc,
+            CrossServerEventStandardizationAnalyzer.DefaultWindowDays,
+            CrossServerEventStandardizationAnalyzer.DefaultHistoryDays,
+            CrossServerEventStandardizationAnalyzer.DefaultMaxServers,
+            CrossServerEventStandardizationAnalyzer.DefaultMaxEventsPerServer,
+            CrossServerEventStandardizationAnalyzer.StatisticsVersion,
+            CrossServerEventStandardizationAnalyzer.StandardizationMethod,
+            CrossServerEventStandardizationAnalyzer.NeutralThreshold,
+            sampleServerCount,
+            asOfUtc.AddDays(-CrossServerEventStandardizationAnalyzer.DefaultHistoryDays),
             asOfUtc,
             metric,
             metric,

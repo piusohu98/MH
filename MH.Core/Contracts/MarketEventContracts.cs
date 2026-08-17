@@ -47,3 +47,34 @@ public sealed record EventPatternSummaryResponse(
     EventPatternMetricSummary AfterPrice,
     EventPatternMetricSummary DuringVisibleSupply,
     EventPatternMetricSummary AfterVisibleSupply);
+
+public sealed record CrossServerEventMetricSummary(
+    bool Available,
+    int ComparableServerCount,
+    decimal? MedianChange,
+    decimal? P25Change,
+    decimal? P75Change,
+    int IncreaseCount,
+    int DecreaseCount,
+    int StableCount,
+    decimal? DirectionConsistency,
+    string? UnavailableReason);
+
+public sealed record CrossServerEventStandardizationResponse(
+    string ItemId,
+    MarketEventType EventType,
+    DateTimeOffset AsOfUtc,
+    int WindowDays,
+    int HistoryDays,
+    int MaxServers,
+    int MaxEventsPerServer,
+    string StatisticsVersion,
+    string StandardizationMethod,
+    decimal NeutralThreshold,
+    int SampleServerCount,
+    DateTimeOffset InputStartUtc,
+    DateTimeOffset InputEndUtc,
+    CrossServerEventMetricSummary DuringPrice,
+    CrossServerEventMetricSummary AfterPrice,
+    CrossServerEventMetricSummary DuringVisibleSupply,
+    CrossServerEventMetricSummary AfterVisibleSupply);

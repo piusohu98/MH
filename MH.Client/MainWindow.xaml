@@ -209,6 +209,9 @@
                             <TextBlock Margin="0,14,0,0" Style="{StaticResource MutedText}" Text="相似活动记录" />
                             <TextBlock Margin="0,4,0,0" Text="{Binding EventPatternSummaryText}" TextWrapping="Wrap" />
                             <TextBlock Margin="0,6,0,0" Foreground="#FCA5A5" Text="{Binding EventPatternSummaryErrorText}" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,14,0,0" Style="{StaticResource MutedText}" Text="跨区比较" />
+                            <TextBlock Margin="0,4,0,0" Text="{Binding CrossServerEventSummaryText}" TextWrapping="Wrap" />
+                            <TextBlock Margin="0,6,0,0" Foreground="#FCA5A5" Text="{Binding CrossServerEventSummaryErrorText}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
 

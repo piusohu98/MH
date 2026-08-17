@@ -76,6 +76,9 @@ public sealed class ClientEventPresentationTests
         Assert.Contains("相似活动历史归纳", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
         Assert.Contains("样本活动 4 个", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
         Assert.Contains("活动中价格", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
+        Assert.Equal(1, api.CrossServerSummaryCalls);
+        Assert.Contains("跨区样本 1 个", viewModel.CrossServerEventSummaryText, StringComparison.Ordinal);
+        Assert.Contains("跨区样本不足", viewModel.CrossServerEventSummaryText, StringComparison.Ordinal);
         Assert.Contains("模拟供应减少", viewModel.EventCalendarText, StringComparison.Ordinal);
         Assert.Contains("模拟供应增加", viewModel.EventCalendarText, StringComparison.Ordinal);
         Assert.DoesNotContain("DayNight", viewModel.EventCalendarText, StringComparison.Ordinal);
@@ -99,6 +102,7 @@ public sealed class ClientEventPresentationTests
         Assert.Contains(nameof(FirstScreenViewModel.EventEvidenceText), propertyNames);
         Assert.Contains(nameof(FirstScreenViewModel.EventResearchNoticeText), propertyNames);
         Assert.Contains(nameof(FirstScreenViewModel.EventPatternSummaryText), propertyNames);
+        Assert.Contains(nameof(FirstScreenViewModel.CrossServerEventSummaryText), propertyNames);
     }
 
     [Fact]
@@ -332,6 +336,66 @@ public sealed class ClientEventPresentationTests
         Assert.Equal(MarketViewState.Ready, viewModel.State);
         Assert.Equal(9, viewModel.SelectedEventPatternSummary!.SampleEventCount);
         Assert.Contains("样本活动 9 个", viewModel.EventPatternSummaryText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CrossServerSummaryFailureRetainsOnlySameScopedSnapshot()
+    {
+        var api = CreateApi(
+            [Event("holiday", MarketEventType.Holiday, "DEMO Festival", AsOfUtc.AddDays(-1), AsOfUtc.AddDays(1))],
+            FakeMarketApi.CreateEventImpact("holiday", AsOfUtc));
+        var viewModel = await LoadAsync(api);
+        var previousSummary = viewModel.SelectedCrossServerEventSummary;
+
+        api.CrossServerSummaryFailure = new HttpRequestException("cross server unavailable");
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.NotNull(viewModel.SelectedEventImpact);
+        Assert.NotNull(viewModel.SelectedEventPatternSummary);
+        Assert.Same(previousSummary, viewModel.SelectedCrossServerEventSummary);
+        Assert.Equal("跨区比较暂时不可用，显示上次同类活动结果。", viewModel.CrossServerEventSummaryErrorText);
+    }
+
+    [Fact]
+    public async Task CrossServerSummaryFailureDoesNotReuseDifferentAsOf()
+    {
+        var api = CreateApi(
+            [Event("holiday", MarketEventType.Holiday, "DEMO Festival", AsOfUtc.AddDays(-1), AsOfUtc.AddDays(2))],
+            FakeMarketApi.CreateEventImpact("holiday", AsOfUtc));
+        var viewModel = await LoadAsync(api);
+
+        api.CrossServerSummaryFailure = new HttpRequestException("cross server unavailable");
+        viewModel.SelectedAsOfUtc = AsOfUtc.AddDays(1);
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.Null(viewModel.SelectedCrossServerEventSummary);
+        Assert.Equal("跨区比较暂时不可用。", viewModel.CrossServerEventSummaryErrorText);
+    }
+
+    [Fact]
+    public async Task OlderCrossServerSummaryCannotOverwriteNewerRefresh()
+    {
+        var api = CreateApi(
+            [Event("holiday", MarketEventType.Holiday, "DEMO Festival", AsOfUtc.AddDays(-1), AsOfUtc.AddDays(1))],
+            FakeMarketApi.CreateEventImpact("holiday", AsOfUtc));
+        api.BlockCrossServerSummary = true;
+        var viewModel = CreateViewModel(api);
+
+        var older = viewModel.RefreshAsync();
+        await api.WaitForCrossServerSummaryCountAsync(1);
+        var newer = viewModel.RefreshAsync();
+        await api.WaitForCrossServerSummaryCountAsync(2);
+
+        api.CompleteCrossServerSummary(1, FakeMarketApi.CreateCrossServerSummary("item-1", MarketEventType.Holiday, AsOfUtc, sampleServerCount: 9));
+        await newer;
+        api.CompleteCrossServerSummary(0, FakeMarketApi.CreateCrossServerSummary("item-1", MarketEventType.Holiday, AsOfUtc, sampleServerCount: 1));
+        await older;
+
+        Assert.Equal(MarketViewState.Ready, viewModel.State);
+        Assert.Equal(9, viewModel.SelectedCrossServerEventSummary!.SampleServerCount);
+        Assert.Contains("跨区样本 9 个", viewModel.CrossServerEventSummaryText, StringComparison.Ordinal);
     }
 
     private static FakeMarketApi CreateApi(

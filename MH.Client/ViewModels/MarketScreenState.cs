@@ -20,4 +20,6 @@ public sealed record MarketScreenSnapshot(
     EventImpactResponse? SelectedEventImpact,
     string? EventResearchError,
     EventPatternSummaryResponse? EventPatternSummary,
-    string? EventPatternSummaryError);
+    string? EventPatternSummaryError,
+    CrossServerEventStandardizationResponse? CrossServerEventSummary,
+    string? CrossServerEventSummaryError);
