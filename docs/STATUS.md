@@ -1,6 +1,6 @@
 # 当前进度与续接说明
 
-快照时间：2026-08-17
+快照时间：2026-08-18
 
 远端仓库：`https://github.com/piusohu98/MH.git`
 
@@ -53,6 +53,7 @@
 - Collector 已增加 `.offline-replay-review.json` 人工复核决定 sidecar：只接受当前 `ReviewRequired` 帧已有候选，或明确拒绝；未处理不算成功，sidecar 绑定 manifest SHA-256、原子写入并在损坏/变化/未知帧时整体忽略。WPF 列表已提供候选选择、接受和拒绝动作，但决定仍只用于本地恢复和展示，不上传、不写入行情。
 - Collector 已增加 `offline-replay-export-v1` 本地证据导出：绑定 manifest/review sidecar SHA-256，逐帧计算图片 SHA-256，区分自动接受、人工接受、人工拒绝和未处理；导出不猜价格/数量/区服，不调用 Server、不写入行情 SQLite。
 - Client 已增加 `Ctrl+Alt+M` 全局热键和单实例缓存行情悬浮窗：只展示当前 `Snapshot.Series` 作用域的区服/商品、参考价、范围、采集截止、数据年龄和安全文案；无快照、离线或陈旧时 fail-closed，不读取屏幕、不截图、不调用 OCR。热键冲突会显示注册失败，退出时注销。
+- Client 悬浮窗已补齐按热键时鼠标所在显示器的原生工作区定位：启用 PerMonitorV2，使用物理像素工作区和 DPI 缩放边距，跨屏后等 WPF layout/DPI 更新再二次校准；句柄、显示器或定位失败时隐藏窗口并报告失败，不回退猜测主屏。该节点只证明定位契约和自动化边界，不证明人工混合 DPI 目视或真实游戏兼容性。
 
 ## 2. 已验证结果
 
@@ -221,6 +222,25 @@ dotnet build MH.slnx -c Release --no-restore
 
 新增 `GlobalHotkeyService`、`MarketOverlayProjection` 和单实例 `MarketOverlayWindow`，测试覆盖安全状态解析、Ctrl+Alt+M 修饰键、负坐标工作区位置和无快照文案。未进行多显示器/DPI 人工目视验收，不宣称屏幕识别、OCR P95 或真实游戏兼容性。
 
+2026-08-18 Client 多显示器/DPI 定位节点实现：
+
+新增 `OverlayMonitorPositioner` 和 `app.manifest`。悬浮窗按 Ctrl+Alt+M 触发时读取鼠标所在显示器的 `rcWork`，先透明粗定位，再在 WPF 完成 DPI/layout 更新后按当前 HWND 尺寸进行第二次定位；边距按 `GetDpiForWindow` 从 DIP 转为物理像素。原生句柄、显示器、窗口尺寸或几何计算失败时悬浮窗保持隐藏，并在主窗口状态栏显示失败，不回退到 `SystemParameters.WorkArea`。
+
+自动测试覆盖负坐标工作区、非主显示器工作区、96/120/144/192 DPI 边距、窗口无法容纳和非法输入；实际混合 DPI、任务栏和多显示器桌面仍需人工目视验收，不宣称 OCR、P95 或真实游戏证据。
+
+```text
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~MarketOverlayTests
+结果：15 passed，0 failed，0 skipped
+
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-build
+结果：313 passed，0 failed，0 skipped
+
+dotnet build MH.slnx -c Release --no-restore
+结果：5/5 项目成功，0 warning，0 error
+```
+
+Release `MH.Client.exe` 的嵌入 manifest 已通过 Windows SDK `mt.exe` 提取核对，包含 `true/pm` 与 `PerMonitorV2,PerMonitor`；未进行实际混合 DPI 桌面目视验收。
+
 客户端节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。
 
 活动事件研究节点同样由 Luna/max 完成初版；主任务审查发现并修复了缺省 `windowDays` 未按约定使用 7、价格与在售数量基线被错误绑定，以及未来观察测试落在事件总窗口之外三个缺口。修复后由主任务独立重跑 Release 构建、全量测试和真实 HTTP 冒烟，结果如上。
@@ -272,7 +292,7 @@ daf218a feat(client): focus dashboard on game market players
 - 可见供给只作为代理指标，尚未进入回测成交容量约束。
 - 建议预览已接入只读 Server API 和 WPF 第一屏，但尚无建议持久化；当前仍是研究预览，不代表真实资金建议。
 - 跨区事件标准化已完成最小闭环：`cross-server-event-standardization-v1` 先在每个区按活动前稳健中位价计算相对变化，再以区服级中位数等权汇总跨区中位数、P25/P75、方向计数和一致度；价格与在售数量独立处理，少于 2 个可比较区服返回样本不足。当前 DEMO 只有 1 个区服，未伪造第二个区服或真实跨区结论。
-- Client 第一屏和缓存行情悬浮窗仍需人工检查 DPI、字体、长文本及多显示器行为；Collector 已完成离线 OCR 边界、目录匹配、人工复核、证据导出和采集状态转移契约，但尚无真实中文 OCR、屏幕识别或真实页面检测。
+- Client 第一屏和缓存行情悬浮窗仍需人工检查 DPI、字体、长文本及混合多显示器行为；悬浮窗自动定位契约已完成。Collector 已完成离线 OCR 边界、目录匹配、人工复核、证据导出和采集状态转移契约，但尚无真实中文 OCR、屏幕识别或真实页面检测。
 - 尚无真实截图、OCR 模型、商品别名字典和标注集，不能评估真实识别率或 OCR P95。
 - 尚未实现自包含 Windows 发布和 CI。
 - 区服人数和高消费玩家只能做代理指数，尚无校准数据，不能输出具体人数。
@@ -298,7 +318,7 @@ dotnet run --project MH.Client\MH.Client.csproj
 4. 暂停服务后再次刷新，旧图表应保留，状态变为离线/陈旧，候选买卖必须降为不可执行；恢复服务后可再次刷新。
 5. 展开“查看分析依据（进阶）”，确认技术指标不会默认抢占主界面；缩小窗口后左右两列都应可滚动，重点检查高 DPI、中文字体和长理由是否截断。
 
-阶段 2 已正式关闭，阶段 3.0 离线图片/目录回放、阶段 3.1 的 OCR 边界、确定性 Fake、商品候选匹配、人工复核 sidecar、证据导出和缓存行情悬浮窗已完成。下一步只有在中文模型、字典、标注夹具和页面捕获边界可核验时才接入真实 RapidOcrNet/屏幕识别适配器；不宣称真实识别率或 OCR P95。
+阶段 2 已正式关闭，阶段 3.0 离线图片/目录回放、阶段 3.1 的 OCR 边界、确定性 Fake、商品候选匹配、人工复核 sidecar、证据导出、缓存行情悬浮窗和原生多显示器/DPI 定位契约已完成。下一步只有在中文模型、字典、标注夹具和页面捕获边界可核验时才接入真实 RapidOcrNet/屏幕识别适配器；在此之前继续保持离线安全边界，不宣称真实识别率或 OCR P95。
 
 交接时应保留以下指标口径：
 

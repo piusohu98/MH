@@ -86,11 +86,16 @@ public partial class App : Application
     {
         if (overlayWindow is null || !overlayWindow.IsLoaded)
         {
-            overlayWindow = new MarketOverlayWindow(viewModel);
+            overlayWindow = new MarketOverlayWindow(viewModel, OnOverlayPlacementCompleted);
         }
 
         overlayWindow.Toggle();
     }
+
+    private void OnOverlayPlacementCompleted(bool succeeded)
+        => mainWindow?.SetHotkeyStatus(succeeded
+            ? "悬浮窗热键：Ctrl+Alt+M"
+            : "Ctrl+Alt+M 悬浮窗定位失败，请检查显示器设置。");
 
     private void CloseOverlayWindow()
     {

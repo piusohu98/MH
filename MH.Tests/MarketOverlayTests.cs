@@ -45,14 +45,61 @@ public sealed class MarketOverlayTests
     [Fact]
     public void OverlayPositionStaysInsideNegativeCoordinateWorkArea()
     {
-        var position = OverlayPositionCalculator.Calculate(
+        var calculated = OverlayPositionCalculator.TryCalculate(
             new Rect(-1920, 0, 1920, 1080),
             new Size(420, 260),
-            24);
+            24,
+            out var position);
 
-        Assert.Equal(-444, position.Left);
-        Assert.Equal(796, position.Top);
-        Assert.True(position.Right <= 0);
-        Assert.True(position.Bottom <= 1080);
+        Assert.True(calculated);
+        Assert.Equal(-444, position.X);
+        Assert.Equal(796, position.Y);
+    }
+
+    [Theory]
+    [InlineData(96u, 24)]
+    [InlineData(120u, 30)]
+    [InlineData(144u, 36)]
+    [InlineData(192u, 48)]
+    public void OverlayMarginScalesToPerMonitorDpi(uint dpi, double expectedPixels)
+    {
+        Assert.True(OverlayPositionCalculator.TryScaleMargin(24, dpi, out var marginPixels));
+        Assert.Equal(expectedPixels, marginPixels);
+    }
+
+    [Fact]
+    public void OverlayPositionUsesSelectedMonitorWorkAreaWithoutPrimaryFallback()
+    {
+        var calculated = OverlayPositionCalculator.TryCalculate(
+            new Rect(1920, -100, 2560, 1400),
+            new Size(495, 390),
+            36,
+            out var position);
+
+        Assert.True(calculated);
+        Assert.Equal(3949, position.X);
+        Assert.Equal(874, position.Y);
+    }
+
+    [Fact]
+    public void OverlayPositionFailsClosedWhenWindowCannotFit()
+    {
+        Assert.False(OverlayPositionCalculator.TryCalculate(
+            new Rect(0, 0, 320, 200),
+            new Size(330, 180),
+            24,
+            out _));
+    }
+
+    [Fact]
+    public void OverlayPositionRejectsInvalidMarginAndDpi()
+    {
+        Assert.False(OverlayPositionCalculator.TryCalculate(
+            new Rect(0, 0, 1920, 1080),
+            new Size(330, 240),
+            -1,
+            out _));
+        Assert.False(OverlayPositionCalculator.TryScaleMargin(24, 0, out _));
+        Assert.False(OverlayPositionCalculator.TryScaleMargin(double.NaN, 144, out _));
     }
 }

@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using MH.Client.ViewModels;
 
 namespace MH.Client;
@@ -6,10 +7,15 @@ namespace MH.Client;
 public partial class MarketOverlayWindow : Window
 {
     private readonly FirstScreenViewModel viewModel;
+    private readonly Action<bool>? placementCompleted;
+    private long placementGeneration;
 
-    public MarketOverlayWindow(FirstScreenViewModel viewModel)
+    public MarketOverlayWindow(
+        FirstScreenViewModel viewModel,
+        Action<bool>? placementCompleted = null)
     {
         this.viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        this.placementCompleted = placementCompleted;
         InitializeComponent();
         viewModel.PropertyChanged += ViewModel_PropertyChanged;
         RefreshProjection();
@@ -19,25 +25,63 @@ public partial class MarketOverlayWindow : Window
     {
         if (IsVisible)
         {
+            placementGeneration++;
+            Opacity = 1;
             Hide();
             return;
         }
 
+        var generation = ++placementGeneration;
         RefreshProjection();
+        Opacity = 0;
         Show();
         UpdateLayout();
-        var position = OverlayPositionCalculator.Calculate(
-            SystemParameters.WorkArea,
-            new Size(ActualWidth, ActualHeight),
-            24);
-        Left = position.Left;
-        Top = position.Top;
+        if (!OverlayMonitorPositioner.TryAcquireAndPosition(this, 24, out var target))
+        {
+            FailPlacement(generation);
+            return;
+        }
+
+        _ = Dispatcher.BeginInvoke(
+            DispatcherPriority.Loaded,
+            () => CompletePlacement(generation, target));
     }
 
     protected override void OnClosed(EventArgs e)
     {
+        placementGeneration++;
         viewModel.PropertyChanged -= ViewModel_PropertyChanged;
         base.OnClosed(e);
+    }
+
+    private void CompletePlacement(long generation, OverlayMonitorTarget target)
+    {
+        if (generation != placementGeneration || !IsVisible)
+        {
+            return;
+        }
+
+        UpdateLayout();
+        if (!OverlayMonitorPositioner.TryPosition(this, target, 24))
+        {
+            FailPlacement(generation);
+            return;
+        }
+
+        Opacity = 1;
+        placementCompleted?.Invoke(true);
+    }
+
+    private void FailPlacement(long generation)
+    {
+        if (generation != placementGeneration)
+        {
+            return;
+        }
+
+        Opacity = 1;
+        Hide();
+        placementCompleted?.Invoke(false);
     }
 
     private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -54,14 +98,4 @@ public partial class MarketOverlayWindow : Window
 
     private void RefreshProjection()
         => DataContext = MarketOverlayProjection.From(viewModel);
-}
-
-public static class OverlayPositionCalculator
-{
-    public static Rect Calculate(Rect workArea, Size windowSize, double margin)
-    {
-        var left = Math.Max(workArea.Left, workArea.Right - windowSize.Width - margin);
-        var top = Math.Max(workArea.Top, workArea.Bottom - windowSize.Height - margin);
-        return new Rect(left, top, windowSize.Width, windowSize.Height);
-    }
 }
