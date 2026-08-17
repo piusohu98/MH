@@ -233,6 +233,9 @@ public sealed class OfflineReplayService
                 || result.CapturedAtUtc != frame.CapturedAtUtc.Value
                 || result.Reason is null
                 || result.CandidateText is null
+                || result.Candidates is null
+                || (result.Status == OfflineReplayStatus.ReviewRequired
+                    && result.Candidates.Count == 0)
                 || !Enum.IsDefined(result.Status))
             {
                 return false;
@@ -470,6 +473,8 @@ public sealed record OfflineReplayFrameResult(
     string Reason,
     string CandidateText)
 {
+    public IReadOnlyList<OfflineReplayCandidate> Candidates { get; init; } = [];
+
     public string CapturedAtText => CapturedAtUtc == default
         ? "未提供"
         : CapturedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
@@ -495,7 +500,10 @@ public sealed record OfflineReplayFrameResult(
                 : string.Join("；", result.Issues.Select(issue => issue.Detail)),
             result.Candidates.Count == 0
                 ? "无候选"
-                : string.Join("、", result.Candidates.Select(candidate => candidate.DisplayName ?? candidate.ItemId)));
+                : string.Join("、", result.Candidates.Select(candidate => candidate.DisplayName ?? candidate.ItemId)))
+        {
+            Candidates = result.Candidates
+        };
 
     internal static OfflineReplayFrameResult Rejected(OfflineReplayDocumentFrame frame, string reason)
         => new(

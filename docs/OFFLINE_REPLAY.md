@@ -67,3 +67,28 @@ dotnet run --project MH.Collector\MH.Collector.csproj
 启动后选择包含 `manifest.json` 的目录。列表会按捕获时间、图片路径和帧 ID 确定性排序，并显示成功、需人工复核和拒绝数量。回放期间状态栏显示当前帧/总帧数，可用“取消”停止；结束时会明确提示需要人工复核的帧数，不会自动确认候选。
 
 回放每完成一帧，会在同一目录原子更新 `.offline-replay-checkpoint.json`。checkpoint 固定绑定当前 `manifest.json` 的 SHA-256，并只接受与确定性排序结果一致的连续已完成帧；取消或进程中断后重新选择同一目录时只处理剩余帧。manifest 内容变化、checkpoint 损坏、版本不匹配或帧元数据不一致时会忽略旧 checkpoint 并从头回放。完整成功后 sidecar 会被删除。
+
+## 人工复核决定
+
+需复核帧可以在 Collector 列表中从当前帧已有候选里明确选择“接受”，或明确“拒绝”。未处理帧不会被视为成功；不存在于当前候选列表的商品不能被选择。决定保存在同一目录的 `.offline-replay-review.json`，格式版本为 `offline-replay-review-v1`：
+
+```json
+{
+  "version": "offline-replay-review-v1",
+  "manifestSha256": "...",
+  "decisions": [
+    {
+      "frameId": "frame-001",
+      "kind": "Accepted",
+      "candidateItemId": "demo-item-01"
+    },
+    {
+      "frameId": "frame-002",
+      "kind": "Rejected",
+      "candidateItemId": null
+    }
+  ]
+}
+```
+
+sidecar 绑定当前 `manifest.json` 的 SHA-256 和帧 ID。损坏 JSON、manifest 变化、重复/未知帧、非 `ReviewRequired` 帧或非法候选会被整体忽略；写入使用临时文件后原子替换，原始 manifest 和 checkpoint 不会被覆盖。复核决定当前只用于本地恢复和 UI 展示，不调用 Server API、不上传图片、不自动写入行情，也不能证明真实 OCR 或页面状态。

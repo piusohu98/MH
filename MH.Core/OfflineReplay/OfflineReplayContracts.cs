@@ -39,6 +39,17 @@ public enum OfflineReplayStatus
     Rejected = 2
 }
 
+public enum OfflineReplayReviewDecisionKind
+{
+    Accepted = 0,
+    Rejected = 1
+}
+
+public sealed record OfflineReplayReviewDecision(
+    string FrameId,
+    OfflineReplayReviewDecisionKind Kind,
+    string? CandidateItemId);
+
 public sealed record OfflineReplayIssue(string Code, string Detail);
 
 public sealed record OfflineReplayResult(

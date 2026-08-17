@@ -76,6 +76,35 @@
                     <GridViewColumn Header="图片" DisplayMemberBinding="{Binding ImagePath}" Width="220" />
                     <GridViewColumn Header="候选商品" DisplayMemberBinding="{Binding CandidateText}" Width="190" />
                     <GridViewColumn Header="原因" DisplayMemberBinding="{Binding Reason}" Width="230" />
+                    <GridViewColumn Header="人工决定" Width="240">
+                        <GridViewColumn.CellTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <ComboBox Width="100"
+                                              ItemsSource="{Binding Candidates}"
+                                              DisplayMemberPath="DisplayName"
+                                              SelectedValuePath="ItemId"
+                                              SelectedValue="{Binding SelectedCandidateId, Mode=TwoWay}"
+                                              IsEnabled="{Binding CanAccept}" />
+                                    <Button Width="42"
+                                            Margin="4,0,0,0"
+                                            Content="接受"
+                                            Tag="{Binding}"
+                                            Click="AcceptReviewButton_Click"
+                                            IsEnabled="{Binding CanAccept}" />
+                                    <Button Width="42"
+                                            Margin="4,0,0,0"
+                                            Content="拒绝"
+                                            Tag="{Binding}"
+                                            Click="RejectReviewButton_Click"
+                                            IsEnabled="{Binding CanReject}" />
+                                    <TextBlock Margin="4,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Text="{Binding ReviewDecisionText}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </GridViewColumn.CellTemplate>
+                    </GridViewColumn>
                 </GridView>
             </ListView.View>
         </ListView>

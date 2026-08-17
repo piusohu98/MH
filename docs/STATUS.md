@@ -50,6 +50,7 @@
 - 阶段 4 离线闭环首片已增加 `.offline-replay-checkpoint.json`：每帧完成后原子写入，checkpoint 绑定 manifest SHA-256 和连续确定性帧前缀；取消后只恢复剩余帧，manifest 变化或 sidecar 损坏时从头回放，完整成功后清理。
 - Collector 已增加 `Reading/Recognizing/ReviewRequired/Completed/Failed` 进度事件和窗口取消入口；回放期间禁用目录切换/重复启动，状态栏显示当前帧，结束时明确需要人工复核的数量且不自动确认。
 - `CollectorRunStateMachine` 已固定 `Idle/Observing/Capturing/Recognizing/ReviewRequired`、五类人工停止状态和 `Stopped` 的转移规则。非法/未知事件 fail-closed，`Stopped` 不能直接恢复；这只是状态契约，当前没有真实页面分类器或窗口捕获器。
+- Collector 已增加 `.offline-replay-review.json` 人工复核决定 sidecar：只接受当前 `ReviewRequired` 帧已有候选，或明确拒绝；未处理不算成功，sidecar 绑定 manifest SHA-256、原子写入并在损坏/变化/未知帧时整体忽略。WPF 列表已提供候选选择、接受和拒绝动作，但决定仍只用于本地恢复和展示，不上传、不写入行情。
 
 ## 2. 已验证结果
 
@@ -172,6 +173,21 @@ dotnet build MH.slnx -c Release --no-restore
 ```
 
 提交 `f4978aa` 固定正常识别、人工复核、登录/更新/验证码/掉线/未知页面停止、显式停止/重置和非法事件语义；提交 `f025cb7` 阻止旧回放或已取消回放的排队 progress 回调覆盖当前 UI。离线错误仍保持离线错误，未映射成任何真实页面状态。
+
+2026-08-17 Collector 离线人工复核决定节点复验：
+
+```text
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore --filter FullyQualifiedName~CollectorReplayReviewTests
+结果：4 passed，0 failed，0 skipped
+
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore
+结果：295 passed，0 failed，0 skipped
+
+dotnet build MH.slnx -c Release --no-restore
+结果：5/5 项目成功，0 warning，0 error
+```
+
+新增 `OfflineReplayReviewDecision` 与 `.offline-replay-review.json` sidecar，覆盖接受现有候选、明确拒绝、未处理/非法候选、manifest 变化、损坏 JSON、未知帧和临时文件清理。复核结果不调用 Server API、不上传图片、不自动写入行情；真实中文 OCR、页面检测和端到端导入仍未完成。
 
 客户端节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。
 
