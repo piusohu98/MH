@@ -12,6 +12,7 @@ artifacts/
 
 # Local MH data
 /data/
+/_input/
 *.db
 *.db-shm
 *.db-wal

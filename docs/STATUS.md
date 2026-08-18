@@ -241,6 +241,25 @@ dotnet build MH.slnx -c Release --no-restore
 
 Release `MH.Client.exe` 的嵌入 manifest 已通过 Windows SDK `mt.exe` 提取核对，包含 `true/pm` 与 `PerMonitorV2,PerMonitor`；未进行实际混合 DPI 桌面目视验收。
 
+2026-08-18 阶段 3.2 OCR 基线数据集工程化：
+
+- 新增 `MH.Core.Ocr` 的 `ocr-dataset-v1` 契约和校验器，固定图片扩展名、相对路径、SHA-256、页面类型、正/辅助/负样本和 OCR 推荐边界；推荐样本必须是带商品名与价格标签的 `MarketList`，不会被解释为可写入行情的数据。
+- 新增 `scripts/Prepare-OcrDataset.ps1` 和 `docs/OCR_DATASET.md`。脚本读取 `_input/step1-web-candidates/review-confirmed.csv`，校验图片存在性、目录边界和 SHA-256，并按重复图片的标签优先级 `positive > auxiliary > negative` 合并；同等级正样本标签冲突时直接失败。
+- 当前输入为 207 条审核记录，按 SHA-256 生成 149 个独立样本：41 个正样本、101 个辅助样本、7 个负样本。输出位于被 Git 忽略的 `_input` 目录，`sourceKind` 固定为 `public-web-debug-only`，不写入 SQLite、不调用 Server、不代表当前客户端识别率。
+
+```text
+pwsh -NoProfile -File scripts\Prepare-OcrDataset.ps1 -Root _input\step1-web-candidates
+结果：149 个样本（正样本 41，辅助 101，负样本 7）
+
+dotnet test MH.Tests\MH.Tests.csproj -c Release --no-restore
+结果：318 passed，0 failed，0 skipped
+
+dotnet build MH.slnx -c Release --no-restore
+结果：5/5 项目成功，0 warning，0 error
+```
+
+该节点只完成数据集工程化，不接入 RapidOcrNet 中文模型、不宣称 OCR 识别率/P95，也不把公开截图价格写入行情。
+
 客户端节点由 Luna/max 子任务完成初版，主任务独立审查时发现并修复两项安全降级缺口：在线陈旧数据未标记，以及掉线后旧的可执行快照仍可能显示为可执行。
 
 活动事件研究节点同样由 Luna/max 完成初版；主任务审查发现并修复了缺省 `windowDays` 未按约定使用 7、价格与在售数量基线被错误绑定，以及未来观察测试落在事件总窗口之外三个缺口。修复后由主任务独立重跑 Release 构建、全量测试和真实 HTTP 冒烟，结果如上。
